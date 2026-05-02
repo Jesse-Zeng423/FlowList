@@ -40,8 +40,9 @@ export default function AnalyzePage() {
           <Spinner className="size-12 text-violet-300/90" />
           <h1 className="text-2xl font-semibold tracking-tight">Sequencing your set</h1>
           <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
-            Mock pass: harmonizing emotional direction, tempo feel, and energy arc. In production,
-            this step calls your ranking model — the UI state machine stays the same.
+            Prototype sequencing pass (mock analysis only): harmonizing emotional direction, tempo
+            feel, and energy arc. In production this step would call your model — the UI flow stays
+            the same.
           </p>
         </div>
         <div className="w-full max-w-sm space-y-2">

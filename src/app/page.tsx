@@ -18,14 +18,15 @@ export default function HomePage() {
         <section className="space-y-6">
           <p className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-muted-foreground">
             <Sparkles className="size-3.5 text-amber-200/90" />
-            Mock analysis · paste tracks manually (Spotify import not connected)
+            Mock sequencing · YouTube Music first · manual paste · experimental Spotify fallback
           </p>
           <h1 className="max-w-xl text-balance text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
-            Sequences that breathe with you.
+            Turn your YouTube Music playlist into a smoother listening journey.
           </h1>
           <p className="max-w-xl text-pretty text-base leading-relaxed text-muted-foreground sm:text-lg">
-            Flowlist reorders playlists for emotional continuity, rhythmic coherence, and a
-            clear energy arc — intro, build, peak, cooldown, and outro — before you press play.
+            Reorder playlists by emotional flow, rhythm continuity, and energy progression — intro,
+            build, peak, cooldown, and outro — before you press play. Designed for YouTube Music
+            first, with manual paste and experimental Spotify fallback.
           </p>
           <div className="flex flex-wrap gap-3">
             <Link
@@ -58,8 +59,8 @@ export default function HomePage() {
                 Emotional continuity
               </CardTitle>
               <CardDescription className="text-muted-foreground">
-                Darkness, intensity, uplift, and flavor tags inform how each song hands off to
-                the next — not just similarity clustering.
+                Darkness, intensity, uplift, and flavor tags inform how each song hands off to the
+                next — not just similarity clustering.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -70,13 +71,13 @@ export default function HomePage() {
                 Rhythmic continuity
               </CardTitle>
               <CardDescription className="text-muted-foreground">
-                Tempo feel, groove intensity, and energy progression are smoothed so the set
-                moves like one composition.
+                Tempo feel, groove intensity, and energy progression are smoothed so the set moves
+                like one composition.
               </CardDescription>
             </CardHeader>
             <CardContent className="text-xs text-muted-foreground">
-              v0 uses deterministic mock sequencing. Swap in your model where `sequencePlaylist`
-              lives — types are already shaped for real analysis.
+              v0 uses deterministic mock sequencing on imported metadata only — no audio download,
+              streaming, or lyrics.
             </CardContent>
           </Card>
         </section>

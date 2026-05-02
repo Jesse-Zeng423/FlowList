@@ -11,7 +11,14 @@ import { cn } from "@/lib/utils";
 
 export default function FlowPage() {
   const router = useRouter();
-  const { selectedFlowIds, toggleFlow, resolvedTracks, playlistInputKind } = useFlow();
+  const {
+    selectedFlowIds,
+    toggleFlow,
+    resolvedTracks,
+    playlistSource,
+    youtubeImport,
+    spotifyImport,
+  } = useFlow();
 
   const canAnalyze = resolvedTracks.length > 0 && selectedFlowIds.length > 0;
 
@@ -26,23 +33,41 @@ export default function FlowPage() {
           </p>
         </div>
 
-        {playlistInputKind === "spotify_url" ? (
-          <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100/90">
-            Spotify import is not connected in this prototype.{" "}
-            <Link href="/playlist" className="font-medium underline underline-offset-2">
-              Paste tracks manually on the import page
-            </Link>{" "}
-            to continue.
-          </p>
-        ) : resolvedTracks.length === 0 ? (
+        {resolvedTracks.length === 0 ? (
           <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100/90">
             No tracks loaded.{" "}
             <Link href="/playlist" className="font-medium underline underline-offset-2">
-              Add tracks on the import page
+              Add a YouTube playlist, manual lines, or the demo on the import page
             </Link>
             .
           </p>
-        ) : null}
+        ) : (
+          <div className="rounded-lg border border-white/10 bg-white/[0.04] px-4 py-3 text-sm leading-relaxed text-muted-foreground">
+            {playlistSource === "youtube" && youtubeImport ? (
+              <p>
+                <span className="font-medium text-emerald-200/95">
+                  Imported from YouTube Music / YouTube metadata
+                </span>{" "}
+                — {youtubeImport.name} ({youtubeImport.tracks.length} items). Mock sequencing only.
+              </p>
+            ) : playlistSource === "spotify" && spotifyImport ? (
+              <p>
+                <span className="font-medium text-amber-200/95">Experimental Spotify import</span> —{" "}
+                {spotifyImport.name} ({spotifyImport.tracks.length} tracks).
+              </p>
+            ) : playlistSource === "manual" ? (
+              <p>
+                <span className="font-medium text-foreground">Using manually pasted tracks</span> —{" "}
+                {resolvedTracks.length} track{resolvedTracks.length === 1 ? "" : "s"}.
+              </p>
+            ) : playlistSource === "demo" ? (
+              <p>
+                <span className="font-medium text-violet-200/95">Demo playlist — mock data</span> —{" "}
+                {resolvedTracks.length} track{resolvedTracks.length === 1 ? "" : "s"}.
+              </p>
+            ) : null}
+          </div>
+        )}
 
         <div className="grid gap-3 sm:grid-cols-2">
           {FLOW_KEYWORDS.map((kw) => {
@@ -81,7 +106,7 @@ export default function FlowPage() {
             href="/playlist"
             className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
           >
-            Edit tracks
+            Edit import
           </Link>
           <Button
             type="button"

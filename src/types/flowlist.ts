@@ -4,16 +4,33 @@
 
 export type TempoFeel = "slow" | "medium" | "fast";
 
+export type ArtistConfidence = "parsed" | "channel_fallback" | "unknown";
+
 export type Phase = "Intro" | "Build" | "Peak" | "Cooldown" | "Outro";
 
 /** Stable id for a track row (mock or matched catalog). */
 export type TrackId = string;
 
+/** Optional metadata from YouTube or experimental Spotify import (no audio analysis). */
+export interface TrackImportMeta {
+  source: "youtube" | "spotify";
+  externalUrl: string;
+  thumbnailUrl: string | null;
+  platformTrackId: string;
+  platformPlaylistId: string;
+  rawTitle?: string;
+  channelTitle?: string;
+  durationMs?: number;
+}
+
 export interface TrackAnalysis {
   id: TrackId;
   title: string;
   artist: string;
+  /** How we chose `artist`: title parse vs channel fallback (typical on YouTube). */
+  artistConfidence?: ArtistConfidence;
   album: string;
+  importMeta?: TrackImportMeta;
   /** Short mood label for UI chips. */
   estimatedMood: string;
   /** 1–10 scale for display and sorting. */
@@ -49,6 +66,10 @@ export interface SequencedPlaylist {
   /** Human-readable arc for header summary. */
   moodArcSummary: string;
   rhythmArcSummary: string;
+  /** YouTube/manual rows removed before sequencing (deleted/private/empty). */
+  skippedUnavailableCount?: number;
+  /** Ids passed into the sequencer after filtering; for dev quality checks. */
+  activeInputTrackIds?: string[];
 }
 
 export interface FlowKeywordDefinition {

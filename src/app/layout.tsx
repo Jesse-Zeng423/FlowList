@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Flowlist — AI playlist sequencing",
+  title: "Flowlist — YouTube Music playlist sequencing",
   description:
-    "Reorder playlists for emotional and rhythmic continuity. Prototype with mock data.",
+    "Reorder YouTube Music and YouTube playlists for emotional flow, rhythm continuity, and energy progression. Mock sequencing prototype.",
 };
 
 export default function RootLayout({

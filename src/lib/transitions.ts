@@ -1,4 +1,6 @@
 import type { SequencedTrack, TransitionInsight } from "@/types/flowlist";
+import { DEFAULT_FLOW_IDS } from "@/lib/flow-options";
+import { normalizedFlowIds, primaryFlowArchetype } from "@/lib/flow-archetype";
 
 function tempoWord(t: SequencedTrack["tempoFeel"]): string {
   if (t === "slow") return "slow";
@@ -112,45 +114,93 @@ export function buildTransitions(tracks: SequencedTrack[], flowKeywordIds: strin
   return out;
 }
 
+function moodSummaryForFlow(primary: string, keys: string[], trackCount: number): string {
+  const cinematicExtra =
+    primary !== "cinematic_arc" && keys.includes("cinematic_arc")
+      ? " Cinematic pacing still shapes how tension rises and resolves."
+      : "";
+
+  switch (primary) {
+    case "intense_to_calm":
+      return `This prototype arc places stronger energy, rhythm, and emotional intensity earlier, then eases into calmer, softer territory — matching “intense to calm.”${cinematicExtra}`;
+    case "calm_to_intense":
+      return `The sequence starts steadier and climbs in energy and drive toward a stronger late push — aligned with “calm to intense.”${cinematicExtra}`;
+    case "dark_to_light":
+      return `Mood brightness and emotional lift trend upward across the ${trackCount} tracks, moving from heavier colors toward lighter space.${cinematicExtra}`;
+    case "light_to_dark":
+      return `The playlist gradually shifts into darker, weightier emotional territory rather than staying in a purely bright register.${cinematicExtra}`;
+    case "gradually_uplifting":
+      return `Emotional brightness and perceived lift increase in measured steps — a gradual uplift rather than a single jump.${cinematicExtra}`;
+    case "reflective_cooldown":
+      return `The ordering lands in softer, more introspective ground — room to cool down and reflect instead of pushing harder.${cinematicExtra}`;
+    case "party_build_up":
+    case "workout_energy_rise":
+      return `Rhythm and energy skew toward a late climb, like a warm-up that saves the biggest push for the final stretch.${cinematicExtra}`;
+    case "slow_emotional_build":
+      return `Intensity and vulnerability accrue slowly; the arc favors patience over early spikes.${cinematicExtra}`;
+    case "late_night_emotional":
+      return `The through-line stays intimate and nocturnal — close, subdued, and emotionally direct.${cinematicExtra}`;
+    case "romantic_slow_burn":
+      return `Tempo and intimacy deepen with restraint — romance without rushing the peak.${cinematicExtra}`;
+    case "cinematic_arc":
+    default:
+      return `This mock journey follows a narrative contour: space to breathe, a rising middle, a focal band, then resolution — classic cinematic pacing across ${trackCount} tracks.`;
+  }
+}
+
+function rhythmSummaryForFlow(
+  primary: string,
+  keys: string[],
+  first: SequencedTrack,
+  last: SequencedTrack,
+): string {
+  const cinematicExtra =
+    primary !== "cinematic_arc" && keys.includes("cinematic_arc")
+      ? " Narrative smoothing still governs how tempo steps are staged."
+      : "";
+
+  const span = `Groove intensity runs about ${first.rhythmIntensityScore} → ${last.rhythmIntensityScore} with ${first.tempoFeel} → ${last.tempoFeel} endcaps.`;
+
+  switch (primary) {
+    case "intense_to_calm":
+      return `${span} Rhythmic drive is weighted earlier; later tracks ease toward sparser or steadier motion.${cinematicExtra}`;
+    case "calm_to_intense":
+    case "party_build_up":
+    case "workout_energy_rise":
+      return `${span} Perceived rhythm intensity generally strengthens toward the back half.${cinematicExtra}`;
+    case "reflective_cooldown":
+      return `${span} Later segments favor gentler motion and less aggressive groove.${cinematicExtra}`;
+    case "gradually_uplifting":
+      return `${span} Energy and rhythmic lift trend upward in small controlled steps.${cinematicExtra}`;
+    case "dark_to_light":
+    case "light_to_dark":
+      return `${span} Tempo feel is smoothed between cuts; the arc follows your light/dark mood keyword more than raw BPM.${cinematicExtra}`;
+    case "slow_emotional_build":
+      return `${span} Groove shifts stay gradual so emotional buildup can breathe.${cinematicExtra}`;
+    case "late_night_emotional":
+    case "romantic_slow_burn":
+      return `${span} Rhythmic changes stay understated — continuity matters more than impact.${cinematicExtra}`;
+    case "cinematic_arc":
+    default:
+      return `${span} Rhythmic staging follows a story shape: establish, rise, focal band, then release.${cinematicExtra}`;
+  }
+}
+
 export function buildArcSummaries(
   tracks: SequencedTrack[],
   flowKeywordIds: string[],
 ): { moodArcSummary: string; rhythmArcSummary: string } {
   if (tracks.length === 0) {
-    return {
-      moodArcSummary: "",
-      rhythmArcSummary: "",
-    };
+    return { moodArcSummary: "", rhythmArcSummary: "" };
   }
+  let keys = normalizedFlowIds(flowKeywordIds);
+  if (keys.length === 0) keys = [...DEFAULT_FLOW_IDS];
+  const primary = primaryFlowArchetype(keys);
   const first = tracks[0]!;
   const last = tracks[tracks.length - 1]!;
 
-  const moodDelta = last.moodDarknessScore - first.moodDarknessScore;
-  let moodArcSummary = `Mood moves from “${first.estimatedMood}” toward “${last.estimatedMood}” across ${tracks.length} tracks.`;
-  if (moodDelta > 12) {
-    moodArcSummary += " Brightness and emotional lift increase over time.";
-  } else if (moodDelta < -12) {
-    moodArcSummary += " The arc leans into deeper, more shadowed emotional territory.";
-  } else {
-    moodArcSummary += " Darkness and light stay in dialogue without a single blunt swing.";
-  }
-
-  if (flowKeywordIds.includes("late_night_emotional")) {
-    moodArcSummary += " The set favors intimate, nocturnal colors.";
-  }
-
-  const tempos = tracks.map((t) => t.tempoFeel);
-  const slowPct = tempos.filter((t) => t === "slow").length / tempos.length;
-  const fastPct = tempos.filter((t) => t === "fast").length / tempos.length;
-
-  let rhythmArcSummary = `Rhythm story: groove intensity runs from ${first.rhythmIntensityScore} to ${last.rhythmIntensityScore} with ${first.tempoFeel} → ${last.tempoFeel} endcaps.`;
-  if (slowPct > 0.45) {
-    rhythmArcSummary += " Tempo feel skews slow-to-medium for a patient body rhythm.";
-  } else if (fastPct > 0.45) {
-    rhythmArcSummary += " Tempo feel skews medium-to-fast for sustained motion.";
-  } else {
-    rhythmArcSummary += " Tempo feel mixes slow, medium, and fast with smoothing passes to limit harsh jumps.";
-  }
+  const moodArcSummary = moodSummaryForFlow(primary, keys, tracks.length);
+  const rhythmArcSummary = rhythmSummaryForFlow(primary, keys, first, last);
 
   return { moodArcSummary, rhythmArcSummary };
 }

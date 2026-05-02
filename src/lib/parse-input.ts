@@ -1,15 +1,13 @@
-import type { TrackAnalysis } from "@/types/flowlist";
+import type { ArtistConfidence, TrackAnalysis } from "@/types/flowlist";
 import { MOCK_CATALOG } from "@/lib/mock-catalog";
+import { extractYouTubePlaylistId } from "@/lib/youtube-playlist-id";
 
 const SPOTIFY_PLAYLIST_RE =
   /^https?:\/\/(open\.)?spotify\.com\/(playlist\/|intl-\w+\/playlist\/)[a-zA-Z0-9]+/i;
 
-export const SPOTIFY_IMPORT_DISABLED_MESSAGE =
-  "Spotify import is not connected yet. Please paste tracks manually for this prototype.";
-
 const DASH_DELIMS = [" – ", " — ", " - ", "\t", " | "] as const;
 
-export type PlaylistInputKind = "empty" | "spotify_url" | "manual";
+export type PlaylistInputKind = "empty" | "youtube_url" | "spotify_url" | "manual";
 
 export function looksLikeSpotifyPlaylistUrl(line: string): boolean {
   const s = line.trim();
@@ -24,6 +22,7 @@ export function classifyPlaylistInput(raw: string): PlaylistInputKind {
       .split(/\n/)
       .map((l) => l.trim())
       .find(Boolean) ?? "";
+  if (extractYouTubePlaylistId(firstLine)) return "youtube_url";
   if (looksLikeSpotifyPlaylistUrl(firstLine)) return "spotify_url";
   return "manual";
 }
@@ -129,6 +128,7 @@ export function buildMockTrackAnalysis(
   index: number,
   sourceLine: string,
   albumLabel: string,
+  artistConfidence: ArtistConfidence = "parsed",
 ): TrackAnalysis {
   const seed = `${sourceLine}:${index}:${parsed.title}:${parsed.artist}`;
   const id = `import-${hashToInt(seed, 1_000_000_000)}`;
@@ -159,6 +159,7 @@ export function buildMockTrackAnalysis(
     id,
     title: parsed.title.slice(0, 200) || `Track ${index + 1}`,
     artist: parsed.artist.slice(0, 200),
+    artistConfidence,
     album: albumLabel,
     estimatedMood: mood,
     estimatedEnergy: energy,
@@ -179,6 +180,8 @@ export function resolveManualTracksFromText(
   const lines = parsePlaylistLines(raw);
   return lines.map((line, i) => {
     const parsed = parseTrackLine(line);
-    return buildMockTrackAnalysis(parsed, i, line, albumLabel);
+    const artistConfidence: ArtistConfidence =
+      parsed.artist.trim().toLowerCase() === "unknown artist" ? "unknown" : "parsed";
+    return buildMockTrackAnalysis(parsed, i, line, albumLabel, artistConfidence);
   });
 }

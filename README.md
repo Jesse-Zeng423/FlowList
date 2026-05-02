@@ -1,36 +1,49 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Flowlist
 
-## Getting Started
+Flowlist reorders playlists into a smoother **listening journey** using **emotional continuity**, **rhythmic continuity**, **energy progression**, and **user-chosen flow keywords** (intro → build → peak → cooldown → outro). It does **not** stream music, download audio/video, or run lyrics analysis.
 
-First, run the development server:
+## YouTube Music first
+
+The **primary import path** is a public **YouTube Music** or **YouTube** playlist URL. The app uses the **YouTube Data API v3** (server-side only) to read **playlist and video metadata** — titles, channels, thumbnails, links — then applies **mock sequencing** (not real AI yet).
+
+## Other ways to load tracks
+
+- **Manual paste** — one track per line (`Artist - Song`, `Song - Artist`, `Artist, Song`, etc.). Only your pasted text is used.
+- **Demo playlist** — clearly labeled **mock data** for testing the UI and sequencer.
+- **Experimental Spotify import** — optional **legacy** path using Spotify client credentials. Public playlist access can be **limited by Spotify**; if it fails, use YouTube Music or manual paste. No Spotify OAuth, Audio Features, Audio Analysis, recommendations, or playlist writes.
+
+## Environment variables
+
+Create `.env.local` (never commit real keys):
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `YOUTUBE_API_KEY` | **Yes** for YouTube import | YouTube Data API v3 key (server only; not exposed to the browser). |
+| `SPOTIFY_CLIENT_ID` | No | Experimental Spotify import only. |
+| `SPOTIFY_CLIENT_SECRET` | No | Experimental Spotify import only. |
+
+See `.env.example` for a template.
+
+## Development
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run lint
+npm run build
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Safety / scope
 
-## Learn More
+- No **authentication**, **database**, **payment**, or **real AI API** calls in this prototype.
+- **No** Amazon Music integration.
+- Metadata and user text only — **no** storage of audio/video files.
 
-To learn more about Next.js, take a look at the following resources:
+## Tech stack
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Next.js (App Router), TypeScript, Tailwind CSS, shadcn/ui.

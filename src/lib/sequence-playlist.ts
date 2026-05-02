@@ -1,5 +1,11 @@
 import type { Phase, SequencedPlaylist, SequencedTrack, TrackAnalysis } from "@/types/flowlist";
-import { FLOW_KEYWORDS } from "@/lib/flow-options";
+import { DEFAULT_FLOW_IDS } from "@/lib/flow-options";
+import {
+  normalizedFlowIds,
+  phaseThresholdsForArchetype,
+  primaryFlowArchetype,
+} from "@/lib/flow-archetype";
+import { filterTracksForSequencing } from "@/lib/filter-tracks-for-sequencing";
 import { buildArcSummaries, buildTransitions } from "@/lib/transitions";
 
 function clamp(n: number, lo: number, hi: number) {
@@ -10,25 +16,8 @@ function tempoRank(t: TrackAnalysis["tempoFeel"]): number {
   return t === "slow" ? 0 : t === "medium" ? 1 : 2;
 }
 
-/** Normalize keyword ids; unknown ids ignored. */
-function normalizedKeywords(ids: string[]): string[] {
-  const valid = new Set(FLOW_KEYWORDS.map((k) => k.id));
-  return ids.filter((id) => valid.has(id));
-}
-
-/**
- * Combine selected flows into a 0–100 "desired progression" score per track.
- * Higher score → should appear later in the playlist (after sorting ascending by a derived key we invert as needed).
- *
- * We compute `lateProgress` where higher = later in set. Sort ascending on `lateProgress` gives dark→light when
- * lateProgress correlates with lightness.
- */
 function lateProgressScore(track: TrackAnalysis, keywordIds: string[]): number {
-  let keys = normalizedKeywords(keywordIds);
-  if (keys.length === 0) {
-    keys = ["dark_to_light", "cinematic_arc"];
-  }
-
+  const keys = keywordIds;
   const parts: number[] = [];
 
   const add = (v: number) => {
@@ -67,9 +56,11 @@ function lateProgressScore(track: TrackAnalysis, keywordIds: string[]): number {
         break;
       case "cinematic_arc": {
         const e = track.estimatedEnergy;
-        const ideal = 5.5;
-        const bell = 100 - Math.abs(e - ideal) * 14;
-        add(bell * 0.45 + track.emotionalIntensityScore * 0.35 + track.moodDarknessScore * 0.2);
+        const narrative =
+          track.emotionalIntensityScore * 0.38 +
+          track.moodDarknessScore * 0.22 +
+          (10 - Math.abs(e - 5.5)) * 8;
+        add(narrative);
         break;
       }
       case "party_build_up":
@@ -109,18 +100,95 @@ function smoothTempoOrder(tracks: TrackAnalysis[]): TrackAnalysis[] {
   return arr;
 }
 
-function assignPhases(n: number): Phase[] {
-  if (n === 0) return [];
-  const phases: Phase[] = [];
-  for (let i = 0; i < n; i++) {
-    const t = (i + 0.5) / n;
-    if (t < 0.2) phases.push("Intro");
-    else if (t < 0.45) phases.push("Build");
-    else if (t < 0.7) phases.push("Peak");
-    else if (t < 0.88) phases.push("Cooldown");
-    else phases.push("Outro");
+function relaxPeakKeywords(keywordIds: string[]): boolean {
+  return keywordIds.some((k) =>
+    ["reflective_cooldown", "late_night_emotional", "romantic_slow_burn"].includes(k),
+  );
+}
+
+function peakFitness(track: TrackAnalysis, relaxPeak: boolean): number {
+  let f =
+    track.estimatedEnergy * 4.2 +
+    track.emotionalIntensityScore * 0.028 +
+    track.rhythmIntensityScore * 0.024;
+  if (!relaxPeak && track.estimatedEnergy <= 3) {
+    f -= 10;
+    if (track.emotionalIntensityScore >= 72) f += 6;
   }
-  return phases;
+  if (relaxPeak && track.emotionalIntensityScore > 70) {
+    f += 5;
+  }
+  return f;
+}
+
+/** Demote weak Peak edges so Peak skews to higher energy / intensity / groove. */
+function refinePeakRuns(
+  phases: Phase[],
+  ordered: TrackAnalysis[],
+  fitness: number[],
+  relaxPeak: boolean,
+): void {
+  const n = phases.length;
+  if (n === 0) return;
+  const sortedFit = [...fitness].sort((a, b) => a - b);
+  const median = sortedFit[Math.floor(sortedFit.length / 2)] ?? 0;
+  const thr = relaxPeak ? median * 0.55 : median * 0.92;
+
+  let i = 0;
+  while (i < n) {
+    if (phases[i] !== "Peak") {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < n && phases[j] === "Peak") j++;
+    let lo = i;
+    let hi = j - 1;
+    while (lo <= hi && fitness[lo]! < thr && !relaxPeak && ordered[lo]!.estimatedEnergy <= 4) {
+      phases[lo] = "Build";
+      lo++;
+    }
+    while (hi >= lo && fitness[hi]! < thr && !relaxPeak && ordered[hi]!.estimatedEnergy <= 4) {
+      phases[hi] = "Cooldown";
+      hi--;
+    }
+    if (relaxPeak) {
+      while (
+        lo <= hi &&
+        fitness[lo]! < thr &&
+        ordered[lo]!.estimatedEnergy <= 2 &&
+        ordered[lo]!.emotionalIntensityScore < 55
+      ) {
+        phases[lo] = "Build";
+        lo++;
+      }
+      while (
+        hi >= lo &&
+        fitness[hi]! < thr &&
+        ordered[hi]!.estimatedEnergy <= 2 &&
+        ordered[hi]!.emotionalIntensityScore < 55
+      ) {
+        phases[hi] = "Cooldown";
+        hi--;
+      }
+    }
+    i = j;
+  }
+}
+
+function assignPhaseByIndex(
+  i: number,
+  n: number,
+  thresholds: [number, number, number, number],
+): Phase {
+  if (n <= 1) return "Peak";
+  const t = (i + 0.5) / n;
+  const [a, b, c, d] = thresholds;
+  if (t < a) return "Intro";
+  if (t < b) return "Build";
+  if (t < c) return "Peak";
+  if (t < d) return "Cooldown";
+  return "Outro";
 }
 
 function energyLabel(e: number): string {
@@ -137,9 +205,12 @@ function positionReason(track: TrackAnalysis, phase: Phase, index: number, total
     case "Intro":
       return `Opens the set with ${tempo} pacing and a ${mood} tone so the journey can unfold without rushing.`;
     case "Build":
-      return `Rising chapter: energy reads ${energyLabel(track.estimatedEnergy)} while emotional intensity deepens toward the peak.`;
+      return `Rising chapter: energy reads ${energyLabel(track.estimatedEnergy)} while emotional intensity deepens toward the focal band.`;
     case "Peak":
-      return `Anchor moment — ${mood} at ${energyLabel(track.estimatedEnergy)} energy and a ${tempo} tempo feel to carry the emotional high point.`;
+      if (track.estimatedEnergy <= 4) {
+        return `Focal band — ${mood} with modest surface energy but strong emotional or rhythmic weight for this part of the arc.`;
+      }
+      return `Anchor moment — ${mood} at ${energyLabel(track.estimatedEnergy)} energy and a ${tempo} tempo feel to carry the high point.`;
     case "Cooldown":
       return `Controlled release at roughly ${Math.round(rel * 100)}% through the arc; groove softens while mood stays coherent.`;
     case "Outro":
@@ -153,17 +224,33 @@ function positionReason(track: TrackAnalysis, phase: Phase, index: number, total
  * Main entry: deterministic mock sequencer. Swap implementation for model/API later.
  */
 export function sequencePlaylist(tracks: TrackAnalysis[], flowKeywordIds: string[]): SequencedPlaylist {
-  if (tracks.length === 0) {
+  const { active, skippedCount } = filterTracksForSequencing(tracks);
+  const activeInputTrackIds = active.map((t) => t.id);
+
+  if (active.length === 0) {
     return {
       tracks: [],
       transitions: [],
-      moodArcSummary: "No tracks to analyze yet.",
-      rhythmArcSummary: "Paste a playlist or try a Spotify link (demo mode uses mock tracks).",
+      moodArcSummary:
+        skippedCount > 0
+          ? "Every track was skipped as unavailable (for example deleted or private videos) or had no title."
+          : "No tracks to analyze yet.",
+      rhythmArcSummary:
+        skippedCount > 0
+          ? "Nothing left to sequence after filtering unavailable items."
+          : "Paste a playlist or try a YouTube link.",
+      skippedUnavailableCount: skippedCount > 0 ? skippedCount : undefined,
+      activeInputTrackIds,
     };
   }
 
-  const keys = normalizedKeywords(flowKeywordIds);
-  const scored = tracks.map((t) => ({
+  let keys = normalizedFlowIds(flowKeywordIds);
+  if (keys.length === 0) keys = [...DEFAULT_FLOW_IDS];
+
+  const primary = primaryFlowArchetype(keys);
+  const thresholds = phaseThresholdsForArchetype(primary);
+
+  const scored = active.map((t) => ({
     track: t,
     score: lateProgressScore(t, keys),
   }));
@@ -172,7 +259,11 @@ export function sequencePlaylist(tracks: TrackAnalysis[], flowKeywordIds: string
   let ordered = scored.map((s) => s.track);
   ordered = smoothTempoOrder(ordered);
 
-  const phases = assignPhases(ordered.length);
+  const phases = ordered.map((_, i) => assignPhaseByIndex(i, ordered.length, thresholds));
+  const relax = relaxPeakKeywords(keys);
+  const fitness = ordered.map((t) => peakFitness(t, relax));
+  refinePeakRuns(phases, ordered, fitness, relax);
+
   const sequenced: SequencedTrack[] = ordered.map((t, i) => ({
     ...t,
     phase: phases[i] ?? "Build",
@@ -182,5 +273,12 @@ export function sequencePlaylist(tracks: TrackAnalysis[], flowKeywordIds: string
   const { moodArcSummary, rhythmArcSummary } = buildArcSummaries(sequenced, keys);
   const transitions = buildTransitions(sequenced, keys);
 
-  return { tracks: sequenced, transitions, moodArcSummary, rhythmArcSummary };
+  return {
+    tracks: sequenced,
+    transitions,
+    moodArcSummary,
+    rhythmArcSummary,
+    skippedUnavailableCount: skippedCount > 0 ? skippedCount : undefined,
+    activeInputTrackIds,
+  };
 }

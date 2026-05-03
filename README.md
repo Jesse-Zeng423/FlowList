@@ -17,19 +17,21 @@ flow-list-kappa.vercel.app
 ## Screenshots
 
 ### Landing Page
-![Landing Page](screenshots:landing.png)
+![Landing Page](./screenshots/landing.png)
 
-### Guided Flow
-![Guided Flow](screenshots:import-flow.png.jpg)
-![Guided Flow](screenshots:defining_playlist.jpg)
+### Import Flow
+![Import Flow](./screenshots/import-flow.jpg)
+
+### Define Playlist
+![Define Playlist](./screenshots/defining-playlist.jpg)
 
 ### Flow Keywords
-![Flow Keywords](screenshots:keyword-cards.jpg)
+![Flow Keywords](./screenshots/keyword-cards.jpg)
 
 ### Results
-![Results](screenshots:result1.jpg)
-![Results](screenshots:result2.jpg)
-![Results](screenshots:result3.jpg)
+![Results 1](./screenshots/result1.jpg)
+![Results 2](./screenshots/result2.jpg)
+![Results 3](./screenshots/result3.jpg)
 
 ## Best for
 

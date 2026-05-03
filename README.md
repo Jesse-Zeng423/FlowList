@@ -14,6 +14,23 @@ flow-list-kappa.vercel.app
 - Generate prototype listening order
 - View mood chapters, energy/rhythm arcs, and transition explanations
 
+## Screenshots
+
+### Landing Page
+![Landing Page](screenshots/landing.jpg)
+
+### Guided Flow
+![Guided Flow](screenshots/import-flow.jpg)
+![Guided Flow](screenshots/defining_playlist.jpg)
+
+### Flow Keywords
+![Flow Keywords](screenshots/keyword-cards.jpg)
+
+### Results
+![Results](screenshots/result1.jpg)
+![Results](screenshots/result2.jpg)
+![Results](screenshots/result3.jpg)
+
 ## Best for
 
 - Mixed artists

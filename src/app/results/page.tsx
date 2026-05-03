@@ -583,6 +583,16 @@ function emptyStatePrimaryAction(
   return { href: "/flow", label: "Choose flow keywords" };
 }
 
+function emptyStateSecondaryAction(primary: {
+  href: string;
+  label: string;
+}): { href: string; label: string } {
+  if (primary.href === "/import" && primary.label === "Back to import") {
+    return { href: "/import?demo=1", label: "Try demo playlist" };
+  }
+  return { href: "/import", label: "Back to import" };
+}
+
 function EmptyState({
   stale,
   resolvedTrackCount,
@@ -600,6 +610,7 @@ function EmptyState({
     selectedFlowKeywordIds,
   });
   const primary = emptyStatePrimaryAction(stale, regen);
+  const secondary = emptyStateSecondaryAction(primary);
 
   const helper = stale
     ? regen.canRegenerate
@@ -627,13 +638,13 @@ function EmptyState({
               {primary.label}
             </Link>
             <Link
-              href="/import"
+              href={secondary.href}
               className={cn(
                 buttonVariants({ variant: "secondary" }),
                 "rounded-full bg-white/10 no-underline",
               )}
             >
-              Back to import
+              {secondary.label}
             </Link>
           </div>
         </div>

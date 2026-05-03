@@ -32,6 +32,7 @@ import type {
   TrackAnalysis,
   TransitionInsight,
 } from "@/types/flowlist";
+import { canRegenerateFromCurrentState } from "@/lib/result-freshness";
 import { cn } from "@/lib/utils";
 
 const PHASE_ORDER: Phase[] = ["Intro", "Build", "Peak", "Cooldown", "Outro"];
@@ -492,16 +493,33 @@ function TrackCard({
               <ArtistLine track={track} />
             </div>
             {!hidePhaseBadge ? (
-              <Badge
-                variant="outline"
-                className={cn(
-                  "shrink-0 border text-[10px] font-medium",
-                  phaseBadgeClass(track.phase),
-                  mutedPhaseBadge ? "opacity-70" : "",
-                )}
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "border text-[10px] font-medium",
+                    phaseBadgeClass(track.phase),
+                    mutedPhaseBadge ? "opacity-70" : "",
+                  )}
+                >
+                  {track.phase}
+                </Badge>
+                {track.semanticPhaseRibbon ? (
+                  <span
+                    className="max-w-[11rem] text-right text-[9px] leading-tight text-muted-foreground/80"
+                    title={track.semanticPhaseRibbon}
+                  >
+                    {track.semanticPhaseRibbon}
+                  </span>
+                ) : null}
+              </div>
+            ) : track.semanticPhaseRibbon ? (
+              <span
+                className="max-w-[11rem] text-right text-[9px] leading-tight text-muted-foreground/80"
+                title={track.semanticPhaseRibbon}
               >
-                {track.phase}
-              </Badge>
+                {track.semanticPhaseRibbon}
+              </span>
             ) : null}
           </div>
 
@@ -549,11 +567,50 @@ function TrackCard({
   );
 }
 
+function emptyStatePrimaryAction(
+  stale: boolean,
+  regen: ReturnType<typeof canRegenerateFromCurrentState>,
+): { href: string; label: string } {
+  if (regen.canRegenerate) {
+    return {
+      href: "/analyze",
+      label: stale ? "Generate new sequence" : "Deal the sequence",
+    };
+  }
+  const m = regen.missing[0];
+  if (m === "tracks") return { href: "/import", label: "Back to import" };
+  if (m === "playlistType") return { href: "/playlist-type", label: "Choose playlist type" };
+  return { href: "/flow", label: "Choose flow keywords" };
+}
+
 function EmptyState({
   stale,
+  resolvedTrackCount,
+  playlistTypeId,
+  selectedFlowKeywordIds,
 }: {
   stale: boolean;
+  resolvedTrackCount: number;
+  playlistTypeId: string | null;
+  selectedFlowKeywordIds: string[];
 }) {
+  const regen = canRegenerateFromCurrentState({
+    resolvedTrackCount,
+    playlistTypeId,
+    selectedFlowKeywordIds,
+  });
+  const primary = emptyStatePrimaryAction(stale, regen);
+
+  const helper = stale
+    ? regen.canRegenerate
+      ? "We will run the same prototype sequencer used on the Flow step and take you through the shuffle screen first."
+      : regen.missing.includes("tracks")
+        ? "Add or import tracks before generating a new sequence."
+        : regen.missing.includes("playlistType")
+          ? "Pick a playlist type so flow keywords and sequencing match your musical context."
+          : "Choose at least one flow keyword so the sequencer knows how to shape the journey."
+    : "Start sequencing to import a playlist, choose a flow, and deal a curated spread.";
+
   return (
     <AppFrame contentClassName="max-w-4xl">
       <div className="flow-page-in flex flex-1 flex-col items-start justify-center gap-4 pb-8">
@@ -561,20 +618,16 @@ function EmptyState({
           <h1 className="text-2xl font-semibold tracking-tight">
             {stale ? "Your playlist or flow settings changed." : "No sequence generated yet."}
           </h1>
-          <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
-            {stale
-              ? "Generate a new sequence to see updated results."
-              : "Start sequencing to import a playlist, choose a flow, and deal a curated spread."}
-          </p>
+          <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">{helper}</p>
           <div className="mt-4 flex flex-wrap gap-2">
             <Link
-              href={stale ? "/flow" : "/playlist"}
+              href={primary.href}
               className={cn(buttonVariants({ variant: "default" }), "rounded-full no-underline")}
             >
-              {stale ? "Generate new sequence" : "Start sequencing"}
+              {primary.label}
             </Link>
             <Link
-              href="/playlist"
+              href="/import"
               className={cn(
                 buttonVariants({ variant: "secondary" }),
                 "rounded-full bg-white/10 no-underline",
@@ -590,7 +643,14 @@ function EmptyState({
 }
 
 export default function ResultsPage() {
-  const { result, resultIsStale, reset } = useFlow();
+  const {
+    result,
+    resultIsStale,
+    resolvedTracks,
+    playlistTypeId,
+    selectedFlowKeywordIds,
+    reset,
+  } = useFlow();
   const [copied, setCopied] = useState(false);
 
   const groups = useMemo(
@@ -639,7 +699,16 @@ export default function ResultsPage() {
     URL.revokeObjectURL(url);
   };
 
-  if (!result) return <EmptyState stale={resultIsStale} />;
+  if (!result) {
+    return (
+      <EmptyState
+        stale={resultIsStale}
+        resolvedTrackCount={resolvedTracks.length}
+        playlistTypeId={playlistTypeId}
+        selectedFlowKeywordIds={selectedFlowKeywordIds}
+      />
+    );
+  }
 
   if (result.tracks.length === 0) {
     return (
@@ -651,7 +720,7 @@ export default function ResultsPage() {
               Try another playlist or paste tracks manually.
             </p>
             <Link
-              href="/playlist"
+              href="/import"
               className={cn(buttonVariants({ variant: "default" }), "mt-4 rounded-full no-underline")}
             >
               Back to import
@@ -678,12 +747,6 @@ export default function ResultsPage() {
   return (
     <AppFrame contentClassName="max-w-7xl">
       <div className="flow-page-in flex flex-1 flex-col gap-7 pb-10">
-        {resultIsStale ? (
-          <div className="rounded-2xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-50/95">
-            Your playlist or flow settings changed. Generate a new sequence to see updated results.
-          </div>
-        ) : null}
-
         <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-black/35 p-5 shadow-2xl shadow-black/35 backdrop-blur-xl">
           <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-violet-300/70 to-transparent" />
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(167,139,250,0.18),transparent_45%)]" />

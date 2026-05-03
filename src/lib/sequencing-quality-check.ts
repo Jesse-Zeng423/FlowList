@@ -6,6 +6,7 @@ import {
 } from "@/lib/flow-presets";
 import {
   resolveStrategyFromKeywordIds,
+  strategyUsesWaveMotion,
   type FlowStrategy,
 } from "@/lib/flow-strategies";
 import {
@@ -13,7 +14,9 @@ import {
   strategyPeakScore,
 } from "@/lib/flow-strategy-effects";
 import { transitionCostWithStrategy } from "@/lib/transition-cost";
-import { buildArcSummaries } from "@/lib/transitions";
+import { combineResolvedFlowSemantics, type ResolvedFlowSemantics } from "@/lib/flow-semantics";
+import { FLOW_HARD_CONFLICT_KEYS, flowKeywordCanonPair } from "@/lib/flow-compatibility";
+import { buildArcSummaries, buildTransitions } from "@/lib/transitions";
 
 const PHASE_RANK: Record<string, number> = {
   Intro: 0,
@@ -70,6 +73,23 @@ export function runSequencingQualityChecks(
   }
 
   const { combined: strategy } = resolveStrategyFromKeywordIds(selectedFlowKeywordIds);
+  const flowSemantics = combineResolvedFlowSemantics(selectedFlowKeywordIds);
+
+  // ---- Arc + transition blobs (strategy- and semantics-aware) ----
+  const { moodArcSummary, rhythmArcSummary } = buildArcSummaries(
+    result.tracks,
+    playlistTypeId,
+    selectedFlowKeywordIds,
+    { chapters: result.chapters ?? null, softLandingMeta: result.softLandingMeta ?? null },
+  );
+  const transitionInsightsForQa = buildTransitions(
+    result.tracks,
+    playlistTypeId,
+    selectedFlowKeywordIds,
+    flowSemantics,
+  );
+  const transitionBlobForQa = transitionInsightsForQa.map((x) => x.explanation).join(" ");
+  const positionBlobForQa = result.tracks.map((t) => t.positionReason).join(" ");
 
   // ---- Per-track honesty ----
   for (const t of result.tracks) {
@@ -107,12 +127,6 @@ export function runSequencingQualityChecks(
   }
 
   // ---- Flow / summary contradictions ----
-  const { moodArcSummary } = buildArcSummaries(
-    result.tracks,
-    playlistTypeId,
-    selectedFlowKeywordIds,
-    { chapters: result.chapters ?? null, softLandingMeta: result.softLandingMeta ?? null },
-  );
   const contradictions: Array<{
     test: (s: FlowStrategy) => boolean;
     forbidden: RegExp;
@@ -146,6 +160,7 @@ export function runSequencingQualityChecks(
     const relaxPeak =
       strategy.curveType === "stability-focused" ||
       strategy.curveType === "landing-focused" ||
+      strategyUsesWaveMotion(strategy) ||
       !!strategy.preferredPeak?.mood?.some((m) => /intimate|tension|reflective/i.test(m));
     if (!relaxPeak && lowPeaks > peakTracks.length * 0.6) {
       issues.push(
@@ -226,12 +241,12 @@ export function runSequencingQualityChecks(
     result.chapters.length >= 2 &&
     result.tracks.length >= 6
   ) {
-    const overall = avgAdjacentCost(result.tracks, strategy);
+    const overall = avgAdjacentCost(result.tracks, strategy, flowSemantics);
     let bad = 0;
     for (const ch of result.chapters) {
       if (ch.toIndex - ch.fromIndex < 1) continue;
       const slice = result.tracks.slice(ch.fromIndex, ch.toIndex + 1);
-      const local = avgAdjacentCost(slice, strategy);
+      const local = avgAdjacentCost(slice, strategy, flowSemantics);
       if (local > overall * 1.05) bad += 1;
     }
     if (bad > Math.ceil(result.chapters.length / 2)) {
@@ -271,6 +286,118 @@ export function runSequencingQualityChecks(
     }
   }
 
+  // ---- Energy Wave heuristics (prototype QA) ----------------------------
+  const ENERGY_WAVE_ID = "mixed_mess.energy_wave";
+  const hasEnergyWaveKw = selectedFlowKeywordIds.includes(ENERGY_WAVE_ID);
+  if (hasEnergyWaveKw && result.tracks.length >= 20) {
+    const grooveHeadlineEw = (t: SequencedTrack) => {
+      const energy = Math.min(100, Math.max(0, t.estimatedEnergy * 10));
+      return energy * 0.46 + t.audioFeatures.rhythmIntensity * 0.54;
+    };
+    const g = result.tracks.map(grooveHeadlineEw);
+
+    let crests = 0;
+    let troughs = 0;
+    const db = 1.25;
+    for (let i = 1; i < g.length - 1; i++) {
+      const v = g[i]!;
+      if (v > g[i - 1]! + db && v > g[i + 1]! + db) crests += 1;
+      else if (v < g[i - 1]! - db && v < g[i + 1]! - db) troughs += 1;
+    }
+
+    const n = result.tracks.length;
+
+    const diffs: number[] = [];
+    for (let i = 0; i < g.length - 1; i++) {
+      diffs.push(g[i + 1]! - g[i]!);
+    }
+    let pos = 0;
+    let neg = 0;
+    let materialMoves = 0;
+    for (const d of diffs) {
+      if (Math.abs(d) < 2) continue;
+      materialMoves += 1;
+      if (d > 0) pos += 1;
+      else neg += 1;
+    }
+    const dirDominantShare =
+      materialMoves > 0 ? Math.max(pos, neg) / materialMoves : 0;
+    const nearMonotoneSlope =
+      n >= 32 && materialMoves >= 18 && troughs === 0 && dirDominantShare >= 0.9;
+
+    if (n > 40 && crests < 2) {
+      issues.push(
+        "Energy Wave (>40 tracks): waveform should expose at least two local crests; ordering looks too plateau-like.",
+      );
+    }
+    if (n > 40 && troughs < 1) {
+      issues.push(
+        "Energy Wave (>40 tracks): expected at least one clear release trough between climbs — groove arc looks too one-directional.",
+      );
+    }
+
+    if (n >= 25 && troughs === 0 && crests <= 1) {
+      issues.push(
+        "Energy Wave waveform looks nearly flat/monotone — crests/releases are weaker than targets for wave motion.",
+      );
+    }
+
+    if (nearMonotoneSlope && crests <= 2) {
+      issues.push(
+        "Energy Wave sequencing is dangerously close to a single slope despite wave intent.",
+      );
+    }
+
+    const reasonsBlob = positionBlobForQa;
+    if (
+      !strategy.flags.landingFocused &&
+      /\blanding zone\b|ease(s)? the listener out|softening the landing\b/i.test(
+        `${reasonsBlob} ${transitionBlobForQa}`,
+      )
+    ) {
+      issues.push(
+        "Energy Wave without a landing-focused flow still references landing-zone copy — captions should describe crests/releases instead.",
+      );
+    }
+
+    if (strategy.flags.landingFocused && n >= 10) {
+      const k = Math.max(2, Math.ceil(n * 0.12));
+      const tail = g.slice(-k);
+      const body = g.slice(0, Math.max(k, n - k));
+      const tailAvg = tail.reduce((a, b) => a + b, 0) / tail.length;
+      const bodyAvg = body.reduce((a, b) => a + b, 0) / body.length;
+      if (tailAvg >= bodyAvg - 1.75) {
+        issues.push(
+          "Energy Wave + Soft Landing: final ~12–15% of groove headline should slope softer than earlier sections — sequencing did not decompress the tail strongly enough.",
+        );
+      }
+    }
+  }
+
+  const qaCombinedLower = `${moodArcSummary} ${rhythmArcSummary} ${transitionBlobForQa} ${positionBlobForQa}`.toLowerCase();
+  if (selectedFlowKeywordIds.length === 2) {
+    const pairKey = flowKeywordCanonPair(selectedFlowKeywordIds[0]!, selectedFlowKeywordIds[1]!);
+    if (FLOW_HARD_CONFLICT_KEYS.has(pairKey)) {
+      issues.push(
+        `Semantics QA: conflicting keyword pair in result pipeline (${selectedFlowKeywordIds.join(" vs ")}).`,
+      );
+    }
+  }
+  for (const frag of flowSemantics.explanationBannedPhrasesNormalized) {
+    if (!frag.trim()) continue;
+    if (qaCombinedLower.includes(frag)) {
+      issues.push(`Semantics QA: surfaced copy contains forbidden fragment "${frag}".`);
+    }
+  }
+  if (
+    flowSemantics.noSuddenJumpsKeyword &&
+    (qaCombinedLower.includes("deliberate gear-shift") ||
+      qaCombinedLower.includes("deliberate gear-change") ||
+      qaCombinedLower.includes("intentional whiplash"))
+  ) {
+    issues.push("Semantics QA: No Sudden Jumps selection contradicts transition/summary wording.");
+  }
+
   return { ok: issues.length === 0, issues };
 }
 
@@ -282,13 +409,21 @@ function rank(t: SequencedTrack): number {
       : 2;
 }
 
-function avgAdjacentCost(tracks: SequencedTrack[], strategy: FlowStrategy): number {
+function avgAdjacentCost(
+  tracks: SequencedTrack[],
+  strategy: FlowStrategy,
+  flowSemantics: ResolvedFlowSemantics,
+): number {
   if (tracks.length < 2) return 0;
   let total = 0;
+  const nAdj = tracks.length - 1;
   for (let i = 1; i < tracks.length; i++) {
-    total += transitionCostWithStrategy(tracks[i - 1]!, tracks[i]!, strategy).totalCost;
+    total += transitionCostWithStrategy(tracks[i - 1]!, tracks[i]!, strategy, {
+      position: nAdj > 0 ? i / nAdj : 0.5,
+      flowSemantics,
+    }).totalCost;
   }
-  return total / (tracks.length - 1);
+  return total / nAdj;
 }
 
 /**

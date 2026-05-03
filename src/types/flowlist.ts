@@ -236,6 +236,8 @@ export interface SequencedTrack extends TrackAnalysis {
   phase: Phase;
   /** Why this track sits at this index in the journey. */
   positionReason: string;
+  /** Optional tertiary label from unified semantics (chapter colour, crest ribbon, landing). */
+  semanticPhaseRibbon?: string | null;
 }
 
 export interface TransitionInsight {
@@ -261,6 +263,8 @@ export interface SequencedPlaylistSnapshot {
   playlistName: string | null;
   /** Resolved playlist type label (e.g. "Mixed Mess"), or null. */
   playlistTypeLabel: string | null;
+  /** Stable playlist type id (`mixed_mess`, …); used for freshness (not derived from labels). */
+  playlistTypeId?: string | null;
   /** Selected flow keywords with both id and label, frozen at sequencing time. */
   selectedFlowKeywords: { id: string; label: string }[];
   /** ISO timestamp when this sequence was generated. */

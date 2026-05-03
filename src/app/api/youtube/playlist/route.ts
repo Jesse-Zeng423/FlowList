@@ -16,6 +16,26 @@ const DEFAULT_IMPORT_LIMIT: YoutubeImportLimit = 200;
 const ALLOWED_IMPORT_LIMITS = new Set<number>([100, 200, 300]);
 
 const isDev = process.env.NODE_ENV === "development";
+const isProd = process.env.NODE_ENV === "production";
+
+const GENERIC_IMPORT_FAILURE_DETAILS =
+  "Unexpected server error while importing the playlist.";
+
+function clientNetworkFailureDetails(detailedTechnical: string): string {
+  return isProd
+    ? "Could not reach the YouTube Data API right now. Check your connection or try again later."
+    : detailedTechnical;
+}
+
+/** Never send stack traces to the browser; prod returns a fixed banner string. */
+function clientCatchAllFailureDetails(thrown: unknown): string {
+  if (isProd) return GENERIC_IMPORT_FAILURE_DETAILS;
+  const message =
+    thrown instanceof Error ? thrown.message : typeof thrown === "string" ? thrown : String(thrown);
+  const trimmed = message.trim();
+  if (trimmed.length <= 380) return trimmed;
+  return `${trimmed.slice(0, 380)}…`;
+}
 
 function devLog(message: string, fields?: Record<string, unknown>) {
   if (isDev) {
@@ -335,7 +355,7 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
       return errorJson(
         "YOUTUBE_API_NETWORK_ERROR",
         networkErrorUserMessage("playlists.list"),
-        plResult.clientDetails,
+        clientNetworkFailureDetails(plResult.clientDetails),
         502,
       );
     }
@@ -384,7 +404,7 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
         return errorJson(
           "YOUTUBE_API_NETWORK_ERROR",
           networkErrorUserMessage("playlistItems.list"),
-          itemsResult.clientDetails,
+          clientNetworkFailureDetails(itemsResult.clientDetails),
           502,
         );
       }
@@ -473,12 +493,14 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
       tracks,
     });
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    devLog("Unhandled server error", { message });
+    console.error("[flowlist:youtube-import] unhandled error", e);
+    devLog("Unhandled server error (see stderr)", {
+      summary: e instanceof Error ? e.message : String(e),
+    });
     return errorJson(
       "UNKNOWN_SERVER_ERROR",
       "An unexpected error occurred while importing the playlist.",
-      message,
+      clientCatchAllFailureDetails(e),
       500,
     );
   }

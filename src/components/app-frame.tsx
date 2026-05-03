@@ -32,12 +32,19 @@ export function AppFrame({
               prototype
             </span>
           </Link>
-          <nav className="flex items-center gap-1 text-xs text-muted-foreground">
+          <nav className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
             <Link
-              href="/playlist"
+              href="/import"
               className="rounded-md px-2 py-1 transition-colors hover:bg-white/5 hover:text-foreground"
             >
               Import
+            </Link>
+            <span className="text-white/10">/</span>
+            <Link
+              href="/playlist-type"
+              className="rounded-md px-2 py-1 transition-colors hover:bg-white/5 hover:text-foreground"
+            >
+              Type
             </Link>
             <span className="text-white/10">/</span>
             <Link

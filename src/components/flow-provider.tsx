@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -21,7 +22,16 @@ import {
   resolveManualTracksFromText,
   type PlaylistInputKind,
 } from "@/lib/parse-input";
-import { computeInputFingerprint, sequencePlaylist } from "@/lib/sequence-playlist";
+import { filterTracksForSequencing } from "@/lib/filter-tracks-for-sequencing";
+import {
+  getResultFreshnessStatus,
+  normalizeFlowKeywordIds,
+} from "@/lib/result-freshness";
+import {
+  computeLiveSequencingFingerprint,
+  sequencingDefaultsForFingerprint,
+  sequencePlaylist,
+} from "@/lib/sequence-playlist";
 import { runSequencingQualityChecks } from "@/lib/sequencing-quality-check";
 import { SAMPLE_PLAYLIST_TEXT } from "@/lib/sample-playlist";
 import {
@@ -276,22 +286,64 @@ export function FlowProvider({ children }: { children: ReactNode }) {
    * Once the user runs a fresh sequence, the new `storedResult` snapshot
    * matches the live fingerprint and the result reappears automatically.
    */
-  const liveFingerprint = useMemo(
-    () =>
-      computeInputFingerprint({
+  const freshnessState = useMemo(() => {
+    const { active } = filterTracksForSequencing(resolvedTracks);
+    const eff = sequencingDefaultsForFingerprint(playlistTypeId, selectedFlowKeywordIds);
+    const liveFingerprint = computeLiveSequencingFingerprint({
+      source: playlistSource,
+      importedSourceId,
+      tracks: resolvedTracks,
+      playlistTypeId,
+      flowKeywordIds: selectedFlowKeywordIds,
+    });
+
+    const freshness = getResultFreshnessStatus({
+      liveFingerprint,
+      hasStoredResult: storedResult !== null,
+      snapshot: storedResult?.snapshot,
+      live: {
         source: playlistSource,
-        importedSourceId,
-        trackIds: resolvedTracks.map((t) => t.id),
-        playlistTypeId,
-        flowKeywordIds: selectedFlowKeywordIds,
-      }),
-    [playlistSource, importedSourceId, resolvedTracks, playlistTypeId, selectedFlowKeywordIds],
-  );
-  const resultIsStale =
-    storedResult !== null &&
-    storedResult.snapshot != null &&
-    storedResult.snapshot.inputFingerprint !== liveFingerprint;
-  const result = resultIsStale ? null : storedResult;
+        importedSourceId: importedSourceId ?? null,
+        playlistTypeId: eff.playlistTypeId,
+        activeTrackCount: active.length,
+        normalizedKeywordIds: normalizeFlowKeywordIds(eff.flowKeywordIds),
+      },
+    });
+
+    const resultIsStale = Boolean(storedResult) && !freshness.isFresh;
+    return {
+      liveFingerprint,
+      freshness,
+      resultIsStale,
+      derivedResult: resultIsStale ? null : storedResult,
+    };
+  }, [
+    storedResult,
+    resolvedTracks,
+    playlistSource,
+    importedSourceId,
+    playlistTypeId,
+    selectedFlowKeywordIds,
+  ]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    const snap = storedResult?.snapshot;
+    if (!snap || freshnessState.freshness.isFresh) return;
+    console.debug("[result freshness]", {
+      reason: freshnessState.freshness.reason,
+      liveFingerprint: freshnessState.liveFingerprint,
+      snapshotFingerprint: snap.inputFingerprint,
+    });
+  }, [
+    storedResult,
+    freshnessState.freshness.isFresh,
+    freshnessState.freshness.reason,
+    freshnessState.liveFingerprint,
+  ]);
+
+  const resultIsStale = freshnessState.resultIsStale;
+  const result = freshnessState.derivedResult;
 
   /**
    * Public setter: callers can still force-replace or clear the result. A

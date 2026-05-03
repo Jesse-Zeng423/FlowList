@@ -18,9 +18,10 @@
  */
 
 import type { TempoFeel, TrackAnalysis } from "@/types/flowlist";
-import type {
-  EnergyBand,
-  FlowStrategy,
+import {
+  strategyUsesWaveMotion,
+  type EnergyBand,
+  type FlowStrategy,
 } from "@/lib/flow-strategies";
 
 export function tempoRank(t: TempoFeel): number {
@@ -126,7 +127,7 @@ const PROGRESSION_KEYS: FeatureKey[] = [
  * Each progression target with weight `t` contributes:
  *   - `t > 0` (rising): higher feature → later in playlist
  *   - `t < 0` (falling): higher feature → earlier
- *   - `t === 0.5` (wave): use distance from middle (50)
+ *   - `t === 0.5` (wave): ignored here — waveform ordering runs in `sequence-playlist`
  *
  * For wave / cluster-run / chaptered curves where progression is sparse, the
  * function falls back to a generic "midband" score so the primary sort is at
@@ -140,23 +141,18 @@ export function strategyLateScore(track: TrackAnalysis, strategy: FlowStrategy):
   for (const key of PROGRESSION_KEYS) {
     const target = strategy.progression[key];
     if (typeof target !== "number" || target === 0) continue;
+    // `0.5` marks wave neutrality in the registry — not a monotone rise toward max.
+    if (Math.abs(target - 0.5) < 1e-6) continue;
     const v = featureValue(track, key);
     const w = Math.abs(target);
-    let contrib: number;
-    if (target > 0) {
-      contrib = v;
-    } else if (target < 0) {
-      contrib = 100 - v;
-    } else {
-      contrib = 50;
-    }
+    const contrib = target > 0 ? v : 100 - v;
     score += w * contrib;
     weight += w;
   }
 
   // Fallback for curves that don't drive ordering through progression.
   if (weight === 0) {
-    if (strategy.curveType === "wave" || strategy.curveType === "cluster-run") {
+    if (strategyUsesWaveMotion(strategy) || strategy.curveType === "cluster-run") {
       // Energy slope makes the cluster-run high tracks land in the upper tier.
       const energy = featureValue(track, "energy");
       return energy;

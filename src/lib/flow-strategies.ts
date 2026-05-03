@@ -167,6 +167,11 @@ export interface FlowBehaviorFlags {
    * selected, so the banger cluster never overrides the soft tail.
    */
   bangerClusterMidOnly?: boolean;
+  /**
+   * Energy Wave macro (multi-rise/release). OR-merged from `mixed_mess.energy_wave`
+   * so the waveform passes still run even when Soft Landing dominates `curveType`.
+   */
+  waveMacro?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +376,7 @@ const STRATEGIES: FlowStrategy[] = [
     },
     penalties: { tempoJump: 4, energyJump: 5, rhythmJump: 4, aggressionJump: 4, moodWhiplash: 3 },
     progression: { energy: 0.5, rhythm: 0.5 },
+    flags: { waveMacro: true },
   }),
   mk({
     id: "mixed_mess.mood_chapters",
@@ -1414,9 +1420,10 @@ const CURVE_PRIORITY: FlowCurveType[] = [
   "chaptered",
   "cluster-run",
   "landing-focused",
+  /** Energy Wave beats stability-focused so Genre Bridge cushions transitions without flattening crests/releases. */
+  "wave",
   "stability-focused",
   "peak-centered",
-  "wave",
   "loop",
   "linear-rise",
   "linear-fall",
@@ -1479,6 +1486,7 @@ function resolveConflicts(
   const hasBangerRun = ids.has(KID.bangerRun);
   const hasStormToSerenity = ids.has(KID.stormToSerenity);
   const hasEnergyWave = ids.has(KID.energyWave);
+  const hasGenreBridge = ids.has("mixed_mess.genre_bridge");
 
   // ── Rule 1: No Sudden Jumps + Surprise but Smooth ───────────────────────
   // NSJ's restriction wins: disable surpriseAllowed and pin surpriseTolerance
@@ -1505,6 +1513,19 @@ function resolveConflicts(
     flags.surpriseAllowed = false;
     conflictNotes.push(
       "Energy Wave preserves wave shape, but No Sudden Jumps caps transition sharpness — wave peaks must stay within penalty bounds.",
+    );
+  }
+
+  // ── Rule 2b: Genre Bridge + Energy Wave ───────────────────────────────────
+  if (hasEnergyWave && hasGenreBridge) {
+    conflictNotes.push(
+      "Energy Wave drives macro crests/releases; Genre Bridge cushions the cuts between neighbourhoods so contrasts do not wreck the waveform.",
+    );
+  }
+
+  if (hasEnergyWave && hasSoftLanding) {
+    conflictNotes.push(
+      "Energy Wave keeps the macro waveform (crest/release cycles); Soft Landing bends the final stretch softer without flattening earlier lifts.",
     );
   }
 
@@ -1712,6 +1733,7 @@ function rawMergeStrategies(strategies: FlowStrategy[]): FlowStrategy {
     if (s.flags.surpriseAllowed) flags.surpriseAllowed = true;
     if (s.flags.momentumRequired) flags.momentumRequired = true;
     if (s.flags.loopBack) flags.loopBack = true;
+    if (s.flags.waveMacro) flags.waveMacro = true;
   }
 
   const smoothing = strategies.reduce((acc, s) => acc + s.smoothing, 0) / strategies.length;
@@ -1753,6 +1775,15 @@ function rawMergeStrategies(strategies: FlowStrategy[]): FlowStrategy {
     progression,
     flags,
   };
+}
+
+/**
+ * Energy Wave participates in the combined strategy. True when `curveType` is
+ * `wave`, or when `waveMacro` survived OR-merge (e.g. Soft Landing won curve
+ * dominance but Energy Wave should still reshape ordering).
+ */
+export function strategyUsesWaveMotion(strategy: FlowStrategy): boolean {
+  return strategy.curveType === "wave" || !!strategy.flags.waveMacro;
 }
 
 // ---------------------------------------------------------------------------

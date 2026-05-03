@@ -21,9 +21,19 @@
  * All track features are estimated (prototype). Labels say "mock analysis".
  */
 
-import type { JourneyRole, SequencedChapter, TrackAnalysis } from "@/types/flowlist";
+import type {
+  JourneyRole,
+  SequencedChapter,
+  TempoFeel,
+  TrackAnalysis,
+} from "@/types/flowlist";
 import type { FlowStrategy } from "@/lib/flow-strategies";
 import { transitionCostWithStrategy } from "@/lib/transition-cost";
+
+/** Prefer analysed tempo; preserves behaviour if only the legacy mirror is set. */
+function tempoFeelForChaptering(t: TrackAnalysis): TempoFeel {
+  return t.audioFeatures.tempoFeel ?? t.tempoFeel;
+}
 
 // ---------------------------------------------------------------------------
 // Feature extraction — 12 dimensions, all normalised 0..1
@@ -33,7 +43,8 @@ const DIM = 12;
 type Vec = number[]; // fixed-length DIM array
 
 function trackVec(t: TrackAnalysis): Vec {
-  const tempo = t.tempoFeel === "slow" ? 0.0 : t.tempoFeel === "medium" ? 0.5 : 1.0;
+  const tf = tempoFeelForChaptering(t);
+  const tempo = tf === "slow" ? 0.0 : tf === "medium" ? 0.5 : 1.0;
   return [
     t.mood.moodDarkness / 100,
     t.mood.emotionalWarmth / 100,
@@ -261,7 +272,7 @@ function chapterSig(tracks: TrackAnalysis[]): ChapterSig {
   const avg = (fn: (t: TrackAnalysis) => number) =>
     tracks.reduce((s, t) => s + fn(t), 0) / tracks.length;
   const slowShare =
-    tracks.filter((t) => t.tempoFeel === "slow").length /
+    tracks.filter((t) => tempoFeelForChaptering(t) === "slow").length /
     Math.max(1, tracks.length);
   return {
     energy: avg((t) => t.estimatedEnergy),
@@ -509,8 +520,8 @@ function dominantMoodTags(sig: ChapterSig): string[] {
 
 function tempoProfile(tracks: TrackAnalysis[]): "mostly slow" | "mostly fast" | "mixed" {
   if (tracks.length === 0) return "mixed";
-  const slow = tracks.filter((t) => t.tempoFeel === "slow").length / tracks.length;
-  const fast = tracks.filter((t) => t.tempoFeel === "fast").length / tracks.length;
+  const slow = tracks.filter((t) => tempoFeelForChaptering(t) === "slow").length / tracks.length;
+  const fast = tracks.filter((t) => tempoFeelForChaptering(t) === "fast").length / tracks.length;
   if (slow >= 0.6) return "mostly slow";
   if (fast >= 0.6) return "mostly fast";
   return "mixed";

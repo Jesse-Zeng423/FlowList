@@ -28,7 +28,7 @@ export default function HomePage() {
             </div>
             <div className="flex flex-wrap gap-3">
               <Link
-                href="/playlist"
+                href="/import"
                 className={cn(
                   buttonVariants({ size: "lg" }),
                   "inline-flex rounded-full px-6 shadow-[0_0_32px_rgba(139,92,246,0.25)] no-underline",
@@ -38,7 +38,7 @@ export default function HomePage() {
                 <ArrowRight className="size-4" data-icon="inline-end" />
               </Link>
               <Link
-                href="/playlist?demo=1"
+                href="/import?demo=1"
                 className={cn(
                   buttonVariants({ variant: "outline", size: "lg" }),
                   "rounded-full border-white/15 bg-white/5 px-6 text-foreground no-underline hover:bg-white/10",

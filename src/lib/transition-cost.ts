@@ -25,7 +25,12 @@
 
 import type { TempoFeel, TrackAnalysis } from "@/types/flowlist";
 import {
+  combineResolvedFlowSemantics,
+  type ResolvedFlowSemantics,
+} from "@/lib/flow-semantics";
+import {
   resolveStrategyFromKeywordIds,
+  strategyUsesWaveMotion,
   type FlowStrategy,
 } from "@/lib/flow-strategies";
 
@@ -41,6 +46,8 @@ export interface TransitionCostResult {
 export interface TransitionCostOptions {
   /** Normalized position (0..1) of the *destination* track. */
   position?: number;
+  /** Resolved keyword semantics (landing language, continuity flags). */
+  flowSemantics?: ResolvedFlowSemantics | null;
 }
 
 /**
@@ -106,17 +113,30 @@ export function transitionCostWithStrategy(
         `Tempo changes from ${a.audioFeatures.tempoFeel} to ${b.audioFeatures.tempoFeel}; this jump is cushioned by similar mood darkness.`,
       );
     } else {
+      const continuityFirst = !!opts?.flowSemantics?.noSuddenJumpsKeyword;
       reasons.push(
-        `Tempo changes from ${a.audioFeatures.tempoFeel} to ${b.audioFeatures.tempoFeel} — a deliberate gear-shift in the arc.`,
+        continuityFirst
+          ? `Tempo changes from ${a.audioFeatures.tempoFeel} to ${b.audioFeatures.tempoFeel} — the cut keeps continuity-first framing so neighbouring motion stays adjacent rather than flashy.`
+          : `Tempo changes from ${a.audioFeatures.tempoFeel} to ${b.audioFeatures.tempoFeel} — a deliberate gear-shift in the arc.`,
       );
     }
   }
 
   if (Math.abs(rDelta) >= 18) {
+    const landingVoice =
+      opts?.flowSemantics != null
+        ? opts.flowSemantics.allowsLandingLanguage
+        : strategy.flags.landingFocused || strategy.curveType === "landing-focused";
     reasons.push(
       rDelta < 0
-        ? `Rhythm intensity drops from ${a.audioFeatures.rhythmIntensity} to ${b.audioFeatures.rhythmIntensity}, softening the landing.`
-        : `Rhythm intensity rises from ${a.audioFeatures.rhythmIntensity} to ${b.audioFeatures.rhythmIntensity}, lifting the energy.`,
+        ? landingVoice
+          ? `Rhythm intensity drops from ${a.audioFeatures.rhythmIntensity} to ${b.audioFeatures.rhythmIntensity}, softening the landing.`
+          : strategyUsesWaveMotion(strategy)
+            ? `Rhythm intensity eases (${a.audioFeatures.rhythmIntensity} → ${b.audioFeatures.rhythmIntensity}), releasing groove before the next lift.`
+            : `Rhythm intensity eases from ${a.audioFeatures.rhythmIntensity} to ${b.audioFeatures.rhythmIntensity}.`
+        : strategyUsesWaveMotion(strategy)
+          ? `Rhythm intensity climbs (${a.audioFeatures.rhythmIntensity} → ${b.audioFeatures.rhythmIntensity}) into the next crest.`
+          : `Rhythm intensity rises from ${a.audioFeatures.rhythmIntensity} to ${b.audioFeatures.rhythmIntensity}, lifting the energy.`,
     );
   }
 
@@ -136,7 +156,9 @@ export function transitionCostWithStrategy(
 
   if (Math.abs(aggDelta) >= 30) {
     reasons.push(
-      `Aggression contrast is sharp (${a.mood.aggression} → ${b.mood.aggression}) — a deliberate gear-change.`,
+      opts?.flowSemantics?.noSuddenJumpsKeyword
+        ? `Aggression contrast is sizable (${a.mood.aggression} → ${b.mood.aggression}) but stays inside continuity-first sequencing.`
+        : `Aggression contrast is sharp (${a.mood.aggression} → ${b.mood.aggression}) — a deliberate gear-change.`,
     );
   }
 
@@ -154,6 +176,10 @@ export function transitionCostWithStrategy(
         ? "Cinematic scale expands across the cut, widening the room."
         : "Cinematic scale contracts, pulling the room in.",
     );
+  }
+
+  if (strategy.flags.bridgeMode && (Math.abs(dDelta) >= 14 || Math.abs(wDelta) >= 16)) {
+    reasons.push("Shared tonal anchors help this bridge feel intentional rather than chaotic.");
   }
 
   if (Math.abs(rDelta) < 8 && tempoDelta === 0 && Math.abs(eDelta) <= 1) {
@@ -250,5 +276,9 @@ export function transitionCost(
 ): TransitionCostResult {
   void _playlistTypeId;
   const { combined } = resolveStrategyFromKeywordIds(flowKeywordIds);
-  return transitionCostWithStrategy(a, b, combined, opts);
+  const semantics = combineResolvedFlowSemantics(flowKeywordIds);
+  return transitionCostWithStrategy(a, b, combined, {
+    ...opts,
+    flowSemantics: semantics,
+  });
 }

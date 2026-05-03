@@ -5,9 +5,9 @@ import { Check, Circle, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const STEPS = [
-  { label: "Import", href: "/playlist" },
-  { label: "Type", href: "/flow#type" },
-  { label: "Flow", href: "/flow#keywords" },
+  { label: "Import", href: "/import" },
+  { label: "Type", href: "/playlist-type" },
+  { label: "Flow", href: "/flow" },
   { label: "Shuffle", href: "/analyze" },
 ] as const;
 

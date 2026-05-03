@@ -513,7 +513,7 @@ export const PLAYLIST_TYPES: PlaylistType[] = [
         id: t("jazz_blues", "blue_mood_to_warm_resolution"),
         label: "Blue Mood to Warm Resolution",
         description:
-          "Move from bluesy melancholy toward a softer landing.",
+          "Move from bluesy melancholy toward warmer closing color.",
         archetype: "melancholy_to_resolution",
         smoothing: 1.3,
       },

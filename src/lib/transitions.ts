@@ -11,11 +11,13 @@ import {
 } from "@/lib/flow-presets";
 import {
   resolveStrategyFromKeywordIds,
+  strategyUsesWaveMotion,
   type FlowCurveType,
   type FlowExplanationTone,
   type FlowStrategy,
 } from "@/lib/flow-strategies";
 import { transitionCostWithStrategy } from "@/lib/transition-cost";
+import type { ResolvedFlowSemantics } from "@/lib/flow-semantics";
 
 /**
  * Per-transition explanations using `transitionCostWithStrategy`.
@@ -28,6 +30,7 @@ export function buildTransitions(
   tracks: SequencedTrack[],
   playlistTypeId: string | null,
   flowKeywordIds: string[],
+  flowSemantics: ResolvedFlowSemantics,
 ): TransitionInsight[] {
   const labels = flowKeywordIds
     .map((id) => getFlowKeyword(id)?.label)
@@ -43,7 +46,10 @@ export function buildTransitions(
     const a = tracks[i - 1]!;
     const b = tracks[i]!;
     const position = n > 1 ? i / (n - 1) : 0.5;
-    const { reasons } = transitionCostWithStrategy(a, b, strategy, { position });
+    const { reasons } = transitionCostWithStrategy(a, b, strategy, {
+      position,
+      flowSemantics,
+    });
 
     const chosen = reasons.slice(0, 2);
 
@@ -77,7 +83,7 @@ function moodSummaryByCurve(strategy: FlowStrategy, trackCount: number): string 
     case "linear-fall":
       return `Energy and intensity peak earlier and ease across ${trackCount} tracks toward a calmer landing.`;
     case "wave":
-      return `The order alternates rises and releases so the playlist breathes in waves instead of one flat slope.`;
+      return `Controlled rises and releases weave across ${trackCount} tracks rather than drifting in a straight line — each lift has room to land before the next.`;
     case "chaptered":
       return `The playlist is organised into chapters, each with its own internal rhythm and emotional colour.`;
     case "peak-centered":
@@ -108,7 +114,7 @@ function rhythmSummaryByCurve(
     case "linear-fall":
       return `${span} Rhythmic drive is weighted earlier; later tracks ease toward sparser or steadier motion.`;
     case "wave":
-      return `${span} Rhythm rises and releases in waves — short climbs followed by softer landings.`;
+      return `${span} Rhythm rises and releases in repeating waves rather than drifting in one straight diagonal.`;
     case "chaptered":
       return `${span} Bigger rhythm shifts happen between chapters, not inside them.`;
     case "peak-centered":
@@ -160,8 +166,70 @@ function applyPlaylistTypeTone(
   }
 }
 
+function grooveWaveHeadlineForArc(t: SequencedTrack): number {
+  const energy = Math.min(100, Math.max(0, t.estimatedEnergy * 10));
+  const r = t.audioFeatures.rhythmIntensity;
+  return energy * 0.46 + r * 0.54;
+}
+
+function medianNum(xs: number[]): number {
+  if (!xs.length) return 0;
+  const sorted = [...xs].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)]!;
+}
+
+function averageNum(xs: number[]): number {
+  return xs.reduce((acc, x) => acc + x, 0) / Math.max(xs.length, 1);
+}
+
+function summarizeEnergyWaveArcMood(trackCount: number, hasGenreBridge: boolean): string {
+  if (hasGenreBridge) {
+    return (
+      `This sequence uses Genre Bridge to cushion style changes while Energy Wave shapes the playlist into controlled rises and releases. ` +
+      `Instead of one flat line across ${trackCount} tracks, the order moves through softer pockets, brighter crests, and bridge tracks that stitch contrasting neighbourhoods together without sanding off the waveform.`
+    );
+  }
+  return (
+    `Energy Wave threads ${trackCount} tracks through repeated climbs and decompressions rather than drifting in a gentle diagonal — ` +
+    `bright crests breathe, then soften before the groove lifts again.`
+  );
+}
+
+function summarizeEnergyWaveArcRhythm(
+  tracks: SequencedTrack[],
+  strategy: FlowStrategy,
+  hasGenreBridge: boolean,
+): string {
+  const first = tracks[0]!;
+  const last = tracks[tracks.length - 1]!;
+  const g0 = grooveWaveHeadlineForArc(first);
+  const g1 = grooveWaveHeadlineForArc(last);
+  const grooves = tracks.map(grooveWaveHeadlineForArc);
+  const med = medianNum(grooves);
+  const tailK = Math.max(2, Math.ceil(tracks.length * 0.15));
+  const tailAvg = averageNum(tracks.slice(-tailK).map(grooveWaveHeadlineForArc));
+  let text =
+    `Groove headline runs roughly ${Math.round(g0)} → ${Math.round(g1)} with ${first.audioFeatures.tempoFeel} → ${last.audioFeatures.tempoFeel} endcaps. ` +
+    `Rhythm moves in waves rather than a single slope: lower-groove sections give way to brighter crests, then release before the next lift.`;
+  if (hasGenreBridge) {
+    text +=
+      ` Genre Bridge cushions contrasting cuts between those wave neighbourhoods so big jumps rarely land cold.`;
+  }
+  if (strategy.flags.landingFocused) {
+    text += ` The final wave resolves downward into a softer landing.`;
+  } else if (grooveWaveHeadlineForArc(last) > med + 3 || tailAvg > med + 2.5) {
+    text += ` The final stretch closes on an energetic crest rather than thinning out entirely.`;
+  }
+  return text;
+}
+
 /** Strategy-flag overlays. */
-function applyFlagOverlays(strategy: FlowStrategy, mood: string, rhythm: string): {
+function applyFlagOverlays(
+  strategy: FlowStrategy,
+  mood: string,
+  rhythm: string,
+  omitGenericBridgeRhythmSentence?: boolean,
+): {
   mood: string;
   rhythm: string;
 } {
@@ -176,7 +244,7 @@ function applyFlagOverlays(strategy: FlowStrategy, mood: string, rhythm: string)
   if (strategy.flags.loop) {
     m += " The shape is designed to feel circular — easy to keep playing.";
   }
-  if (strategy.flags.bridgeMode) {
+  if (strategy.flags.bridgeMode && !omitGenericBridgeRhythmSentence) {
     r += " Bridge tracks sit between the most contrasting neighbours rather than being adjacent without a buffer.";
   }
   if (strategy.flags.surpriseAllowed) {
@@ -229,7 +297,17 @@ export function buildArcSummaries(
   let mood = moodSummaryByCurve(strategy, tracks.length);
   let rhythm = rhythmSummaryByCurve(strategy, first, last);
 
-  ({ mood, rhythm } = applyFlagOverlays(strategy, mood, rhythm));
+  const genreBridgeKw = flowKeywordIds.includes("mixed_mess.genre_bridge");
+  const arcWaveVoice = strategyUsesWaveMotion(strategy) || flowKeywordIds.includes("mixed_mess.energy_wave");
+  if (arcWaveVoice) {
+    mood = summarizeEnergyWaveArcMood(tracks.length, genreBridgeKw);
+    rhythm = summarizeEnergyWaveArcRhythm(tracks, strategy, genreBridgeKw);
+  }
+
+  ({
+    mood,
+    rhythm,
+  } = applyFlagOverlays(strategy, mood, rhythm, arcWaveVoice && genreBridgeKw));
 
   const hasMoodChapters = meta?.chapters?.some((c) => c.journeyRole != null);
 

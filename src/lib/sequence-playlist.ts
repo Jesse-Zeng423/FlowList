@@ -7,7 +7,7 @@
  *   2. Resolve the `FlowStrategy` from selected flow keywords (1–2 → combined).
  *   3. Sort tracks by `strategyLateScore` (the strategy's late-progress curve).
  *   4. Apply curve-specific reshape:
- *        - wave             → split into ascending waves
+ *        - wave             → multi-cycle waveform (greedy groove targets + transitions)
  *        - cluster-run      → cluster strongest peak tracks contiguously
  *        - landing-focused  → soft-landing tail + finale guarantee
  *        - chaptered        → assign chapters by mood/rhythm signature
@@ -33,6 +33,10 @@ import type {
 } from "@/types/flowlist";
 import { filterTracksForSequencing } from "@/lib/filter-tracks-for-sequencing";
 import {
+  normalizeFlowKeywordIds,
+  normalizeImportedSourceId,
+} from "@/lib/result-freshness";
+import {
   DEFAULT_DEMO_FLOW_KEYWORD_IDS,
   DEFAULT_DEMO_PLAYLIST_TYPE,
   getFlowKeyword,
@@ -40,6 +44,7 @@ import {
 } from "@/lib/flow-presets";
 import {
   resolveStrategyFromKeywordIds,
+  strategyUsesWaveMotion,
   type FlowStrategy,
 } from "@/lib/flow-strategies";
 import {
@@ -52,6 +57,12 @@ import {
 import { analyzePlaylistFit } from "@/lib/playlist-fit-analysis";
 import { buildMoodChapters } from "@/lib/mood-chapters";
 import { transitionCostWithStrategy } from "@/lib/transition-cost";
+import {
+  combineResolvedFlowSemantics,
+  runSemanticConsistencyDevWarnings,
+  semanticPhaseRibbonLabel,
+  type ResolvedFlowSemantics,
+} from "@/lib/flow-semantics";
 import { buildArcSummaries, buildTransitions } from "@/lib/transitions";
 
 // ---------------------------------------------------------------------------
@@ -88,26 +99,98 @@ function smoothTempoOrder(tracks: TrackAnalysis[], smoothing: number): TrackAnal
 // Curve-specific reshape helpers
 // ---------------------------------------------------------------------------
 
-/** Re-shape ordered (low → high) into rise/fall waves. */
-function shapeIntoWaves(tracks: TrackAnalysis[]): TrackAnalysis[] {
+function clampWave(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n));
+}
+
+/** Estimated groove headline 0–100 for matching a waveform target curve. */
+function trackGrooveForWave(track: TrackAnalysis): number {
+  const energy = clampWave(track.estimatedEnergy * 10, 0, 100);
+  const r = track.audioFeatures.rhythmIntensity;
+  return energy * 0.46 + r * 0.54;
+}
+
+/**
+ * How many full rise/fall cycles to spread across the playlist (user-facing
+ * "waves").
+ */
+function energyWaveCycleCount(trackCount: number): number {
+  if (trackCount < 14) return 2;
+  if (trackCount < 28) return 3;
+  if (trackCount < 45) return 4;
+  return Math.min(5, Math.ceil(trackCount / 12));
+}
+
+/** Target groove at playlist index — sine macro + optional soft-landing pullback. */
+function desiredGrooveAlongWave(
+  index: number,
+  n: number,
+  cycles: number,
+  landingFocused: boolean,
+): number {
+  if (n <= 1) return 50;
+  const u = index / Math.max(1, n - 1);
+  let v = 50 + 43 * Math.sin(u * cycles * Math.PI * 2);
+  if (landingFocused && n >= 7) {
+    const tailGate = Math.max(0.85, 1 - Math.max(0.09, 15 / n));
+    if (u >= tailGate) {
+      const t = (u - tailGate) / Math.max(0.008, 1 - tailGate);
+      const eased = t * t;
+      const glide = clampWave(40 - 32 * eased, 10, 55);
+      v = v * (1 - eased) + glide * eased;
+    }
+  }
+  return clampWave(v, 8, 96);
+}
+
+/**
+ * Controlled multi-cycle waveform: assign each slot a target groove and pick
+ * remaining tracks greedily (bridge/strategy-aware transition penalty blended in).
+ */
+function shapeControlledEnergyWaves(
+  tracks: TrackAnalysis[],
+  strategy: FlowStrategy,
+  flowSemantics: ResolvedFlowSemantics,
+): TrackAnalysis[] {
   const n = tracks.length;
   if (n < 6) return [...tracks];
-  const numWaves = n >= 14 ? 3 : 2;
-  const chunks: TrackAnalysis[][] = Array.from({ length: numWaves }, () => []);
-  for (let i = 0; i < n; i++) {
-    const w = i % numWaves;
-    chunks[w]!.push(tracks[i]!);
-  }
+
+  const cycles = energyWaveCycleCount(n);
+  const landingFocused = !!strategy.flags.landingFocused;
+  const bridgeWeight = strategy.flags.bridgeMode ? 0.28 : 0.15;
+
+  const remaining = [...tracks].sort((a, b) => a.id.localeCompare(b.id));
   const out: TrackAnalysis[] = [];
-  for (const c of chunks) {
-    if (c.length === 0) continue;
-    const ascending = [...c];
-    const half = Math.ceil(ascending.length / 2);
-    const up = ascending.slice(0, half);
-    const down = ascending.slice(half).reverse();
-    out.push(...up, ...down);
+
+  for (let i = 0; i < n; i++) {
+    const target = desiredGrooveAlongWave(i, n, cycles, landingFocused);
+    const prev = i > 0 ? out[i - 1]! : null;
+    let bestIdx = 0;
+    let bestCost = Number.POSITIVE_INFINITY;
+
+    for (let j = 0; j < remaining.length; j++) {
+      const cand = remaining[j]!;
+      const groove = trackGrooveForWave(cand);
+      let cost = Math.abs(groove - target);
+      if (prev) {
+        const tc = transitionCostWithStrategy(prev, cand, strategy, {
+          position: n > 1 ? i / (n - 1) : 0.5,
+          flowSemantics,
+        });
+        cost += bridgeWeight * Math.min(tc.totalCost / 72, 3.8);
+      }
+      const tie = cand.id.localeCompare(remaining[bestIdx]!.id);
+      if (cost < bestCost - 1e-9 || (Math.abs(cost - bestCost) < 1e-9 && tie < 0)) {
+        bestCost = cost;
+        bestIdx = j;
+      }
+    }
+
+    const [chosen] = remaining.splice(bestIdx, 1);
+    if (chosen) out.push(chosen);
   }
-  return out;
+
+  return out.length === n ? out : [...tracks];
 }
 
 /**
@@ -555,6 +638,7 @@ function refinePeakRuns(
   const relaxPeak =
     strategy.curveType === "stability-focused" ||
     strategy.curveType === "landing-focused" ||
+    strategyUsesWaveMotion(strategy) ||
     !!strategy.preferredPeak?.mood?.some((m) => /intimate|tension|reflective/i.test(m));
   const clusterPeak = !!strategy.flags.clusterRun;
 
@@ -614,6 +698,11 @@ function energyLabel(e: number): string {
   return "high";
 }
 
+function landingExplanationAllowed(strategy: FlowStrategy, semantics: ResolvedFlowSemantics): boolean {
+  if (semantics.keywordIds.length > 0) return semantics.allowsLandingLanguage;
+  return strategy.flags.landingFocused || strategy.curveType === "landing-focused";
+}
+
 function positionReason(
   track: TrackAnalysis,
   prev: TrackAnalysis | null,
@@ -622,21 +711,29 @@ function positionReason(
   total: number,
   strategy: FlowStrategy,
   chapterLabel: string | null,
+  waveMotion: boolean,
+  flowSemantics: ResolvedFlowSemantics,
 ): string {
   const tempo = track.audioFeatures.tempoFeel;
   const r = track.audioFeatures.rhythmIntensity;
   const transitionFragment = prev
     ? transitionCostWithStrategy(prev, track, strategy, {
         position: total > 1 ? index / (total - 1) : 0.5,
+        flowSemantics,
       }).reasons[0]
     : null;
 
   const chapterPrefix = chapterLabel ? `${chapterLabel}. ` : "";
 
+  const crestLabels = ["Closing crest", "Final wave", "Last lift", "Final surge"];
+
   switch (phase) {
     case "Intro":
       return `${chapterPrefix}Opens the set with ${tempo} pacing, rhythm intensity ${r}/100, and a ${track.estimatedMood} tone so the journey can unfold without rushing.`;
     case "Build":
+      if (waveMotion) {
+        return `${chapterPrefix}The rhythm climbs toward the next crest — energy reads ${energyLabel(track.estimatedEnergy)}, tension ${track.mood.tension}/100.${transitionFragment ? ` ${transitionFragment}` : ""}`;
+      }
       return `${chapterPrefix}Rising chapter — energy reads ${energyLabel(track.estimatedEnergy)}, tension ${track.mood.tension}/100, leaning the listener toward the focal band.${transitionFragment ? ` ${transitionFragment}` : ""}`;
     case "Peak":
       if (strategy.flags.grandFinale) {
@@ -649,10 +746,18 @@ function positionReason(
     case "Cooldown": {
       const groove = r >= 60 ? "Groove is still present, but " : "";
       const rel = total > 1 ? Math.round((index / (total - 1)) * 100) : 0;
-      return `${chapterPrefix}${groove}Controlled release at ~${rel}% through the arc — energy ${energyLabel(track.estimatedEnergy)}, rhythm ${r}/100, resolution ${track.mood.resolution}/100.`;
+      const wavePhrase = waveMotion ? " Releases the preceding wave before the next lift." : "";
+      return `${chapterPrefix}${groove}Controlled release at ~${rel}% through the arc — energy ${energyLabel(track.estimatedEnergy)}, rhythm ${r}/100, resolution ${track.mood.resolution}/100.${wavePhrase}`;
     }
     case "Outro":
-      return `${chapterPrefix}Landing zone — ${tempo} motion, rhythm ${r}/100, intimacy ${track.mood.intimacy}/100, resolution ${track.mood.resolution}/100. Eases the listener out.`;
+      if (landingExplanationAllowed(strategy, flowSemantics)) {
+        return `${chapterPrefix}Landing zone — ${tempo} motion, rhythm ${r}/100, intimacy ${track.mood.intimacy}/100, resolution ${track.mood.resolution}/100.${transitionFragment ? ` ${transitionFragment}` : ""} Eases the listener out.`;
+      }
+      if (waveMotion) {
+        const label = crestLabels[index % crestLabels.length]!;
+        return `${chapterPrefix}${label} — ${tempo} motion, rhythm intensity ${r}/100, intimacy ${track.mood.intimacy}/100.${transitionFragment ? ` ${transitionFragment}` : ""} The final stretch closes as a crest rather than a cooldown.`;
+      }
+      return `${chapterPrefix}${tempo} motion, rhythm ${r}/100, intimacy ${track.mood.intimacy}/100.${transitionFragment ? ` ${transitionFragment}` : ""}`;
     default:
       return `${chapterPrefix}Placed to support smooth continuity at position ${index + 1}.`;
   }
@@ -713,12 +818,25 @@ interface SequenceInput {
 }
 
 function withDefaults(input: SequenceInput): SequenceInput {
-  if (input.playlistTypeId && input.flowKeywordIds.length > 0) return input;
+  const d = sequencingDefaultsForFingerprint(input.playlistTypeId, input.flowKeywordIds);
   return {
     tracks: input.tracks,
-    playlistTypeId: input.playlistTypeId ?? DEFAULT_DEMO_PLAYLIST_TYPE,
-    flowKeywordIds:
-      input.flowKeywordIds.length > 0 ? input.flowKeywordIds : [...DEFAULT_DEMO_FLOW_KEYWORD_IDS],
+    playlistTypeId: d.playlistTypeId,
+    flowKeywordIds: d.flowKeywordIds,
+  };
+}
+
+/** Same defaulting rules as `sequencePlaylist()` — used by live freshness + UI helpers. */
+export function sequencingDefaultsForFingerprint(
+  playlistTypeId: string | null,
+  flowKeywordIds: readonly string[],
+): { playlistTypeId: string | null; flowKeywordIds: string[] } {
+  if (playlistTypeId && flowKeywordIds.length > 0) {
+    return { playlistTypeId, flowKeywordIds: [...flowKeywordIds] };
+  }
+  return {
+    playlistTypeId: playlistTypeId ?? DEFAULT_DEMO_PLAYLIST_TYPE,
+    flowKeywordIds: flowKeywordIds.length > 0 ? [...flowKeywordIds] : [...DEFAULT_DEMO_FLOW_KEYWORD_IDS],
   };
 }
 
@@ -742,6 +860,27 @@ const SOURCE_LABELS: Record<PlaylistSource, string> = {
   demo: "Demo playlist",
 };
 
+/**
+ * Deterministic digest over the canonical ordered active track id list — compact,
+ * avoids storing raw id arrays inside the fingerprint JSON.
+ * Any reorder or middle replacement changes `tid`.
+ */
+function digestOrderedTrackIds(trackIds: readonly string[]): string {
+  const rs = "\u001e"; // RECORD SEPARATOR — not expected inside platform ids
+  const body = `${rs}${trackIds.length}${rs}${trackIds.join(rs)}${rs}`;
+
+  let h0 = 0x811c_9dc5 >>> 0;
+  let h1 = 5381 >>> 0;
+  for (let i = 0; i < body.length; i++) {
+    const c = body.charCodeAt(i);
+    h0 = Math.imul(h0 ^ c, 0x0100_0193) >>> 0;
+    h1 = Math.imul(33, h1) ^ Math.imul(c + i + 11, i + 1);
+    h1 >>>= 0;
+  }
+
+  return `${trackIds.length.toString(16)}_${h0.toString(16).padStart(8, "0")}_${h1.toString(16).padStart(8, "0")}`;
+}
+
 /** Stable input fingerprint used to detect "result is for the same input". */
 export function computeInputFingerprint(input: {
   source: PlaylistSource;
@@ -750,17 +889,34 @@ export function computeInputFingerprint(input: {
   playlistTypeId: string | null;
   flowKeywordIds: readonly string[];
 }): string {
-  const orderedKeywords = [...input.flowKeywordIds].sort();
+  const orderedKeywords = normalizeFlowKeywordIds(input.flowKeywordIds);
+  const tRaw = input.playlistTypeId?.trim() ?? null;
   return JSON.stringify({
     s: input.source,
-    p: input.importedSourceId ?? null,
-    t: input.playlistTypeId ?? null,
+    p: normalizeImportedSourceId(input.importedSourceId),
+    t: tRaw && tRaw.length > 0 ? tRaw : null,
     k: orderedKeywords,
     n: input.trackIds.length,
-    // First and last 4 ids only — enough to detect track-set drift without
-    // making the fingerprint massive on large playlists.
-    h: input.trackIds.slice(0, 4),
-    z: input.trackIds.slice(-4),
+    tid: digestOrderedTrackIds(input.trackIds),
+  });
+}
+
+/** Fingerprints exactly what `sequencePlaylist` snapshots (active tracks post-filter + defaults). */
+export function computeLiveSequencingFingerprint(args: {
+  source: PlaylistSource;
+  importedSourceId?: string | null;
+  tracks: readonly TrackAnalysis[];
+  playlistTypeId: string | null;
+  flowKeywordIds: readonly string[];
+}): string {
+  const effective = sequencingDefaultsForFingerprint(args.playlistTypeId, args.flowKeywordIds);
+  const { active } = filterTracksForSequencing([...args.tracks]);
+  return computeInputFingerprint({
+    source: args.source,
+    importedSourceId: args.importedSourceId,
+    trackIds: active.map((t) => t.id),
+    playlistTypeId: effective.playlistTypeId,
+    flowKeywordIds: effective.flowKeywordIds,
   });
 }
 
@@ -783,6 +939,7 @@ function buildSnapshot(args: {
     sourceLabel: SOURCE_LABELS[args.source],
     playlistName: args.playlistName,
     playlistTypeLabel: getPlaylistTypeLabel(args.playlistTypeId),
+    playlistTypeId: args.playlistTypeId,
     selectedFlowKeywords,
     generatedAt: new Date().toISOString(),
     trackCount: args.trackIds.length,
@@ -868,8 +1025,11 @@ export function sequencePlaylist(
   const { combined: strategy, parts } = resolveStrategyFromKeywordIds(input.flowKeywordIds);
   void parts;
 
+  const flowSemantics = combineResolvedFlowSemantics(input.flowKeywordIds);
+
   // ---- Ordering ----
   const curve = strategy.curveType;
+  const waveMotion = strategyUsesWaveMotion(strategy);
   let ordered: TrackAnalysis[];
   let chapterRanges: ChapterRange[] | null = null;
   let chapters: SequencedChapter[] | undefined;
@@ -910,18 +1070,18 @@ export function sequencePlaylist(
   } else {
     // ---- Standard pipeline ----
 
-    // Primary ordering: late-progress score under strategy.
-    const scored = active.map((t) => ({ track: t, score: strategyLateScore(t, strategy) }));
-    scored.sort((a, b) => a.score - b.score);
-    ordered = scored.map((s) => s.track);
+    if (waveMotion) {
+      ordered = shapeControlledEnergyWaves(active, strategy, flowSemantics);
+      ordered = smoothTempoOrder(ordered, strategy.smoothing);
+      ordered = smoothTempoOrder(ordered, Math.max(0.58, strategy.smoothing * 0.68));
+    } else {
+      // Primary ordering: late-progress score under strategy.
+      const scored = active.map((t) => ({ track: t, score: strategyLateScore(t, strategy) }));
+      scored.sort((a, b) => a.score - b.score);
+      ordered = scored.map((s) => s.track);
 
-    // Light tempo smoothing pass.
-    ordered = smoothTempoOrder(ordered, strategy.smoothing);
-
-    // Curve-specific reshape.
-    if (curve === "wave") {
-      ordered = shapeIntoWaves(ordered);
-      ordered = smoothTempoOrder(ordered, Math.max(0.6, strategy.smoothing * 0.6));
+      // Light tempo smoothing pass.
+      ordered = smoothTempoOrder(ordered, strategy.smoothing);
     }
 
     if (curve === "cluster-run" || strategy.flags.clusterRun) {
@@ -968,19 +1128,31 @@ export function sequencePlaylist(
   }
 
   // ---- Build sequenced tracks ----
+  const hideSemanticRibbonForMoodChapters = isMoodChapters;
   const sequenced: SequencedTrack[] = ordered.map((t, i) => {
     const chapterLabel = chapterRanges && chapters ? chapterLabelForIndex(i, chapterRanges, chapters) : null;
+    const phase = phases[i] ?? "Build";
     return {
       ...t,
-      phase: phases[i] ?? "Build",
+      phase,
+      semanticPhaseRibbon: semanticPhaseRibbonLabel({
+        phase,
+        index: i,
+        total: ordered.length,
+        isLastTrack: i === ordered.length - 1,
+        semantics: flowSemantics,
+        hideForMoodRibbon: hideSemanticRibbonForMoodChapters,
+      }),
       positionReason: positionReason(
         t,
         i > 0 ? ordered[i - 1]! : null,
-        phases[i] ?? "Build",
+        phase,
         i,
         ordered.length,
         strategy,
         chapterLabel,
+        waveMotion,
+        flowSemantics,
       ),
     };
   });
@@ -993,7 +1165,22 @@ export function sequencePlaylist(
     input.flowKeywordIds,
     { softLandingMeta, chapters: chapters ?? null },
   );
-  const transitions = buildTransitions(sequenced, input.playlistTypeId, input.flowKeywordIds);
+  const transitions = buildTransitions(
+    sequenced,
+    input.playlistTypeId,
+    input.flowKeywordIds,
+    flowSemantics,
+  );
+
+  if (process.env.NODE_ENV === "development") {
+    runSemanticConsistencyDevWarnings({
+      flowKeywordIds: input.flowKeywordIds,
+      moodArcSummary,
+      rhythmArcSummary,
+      transitionBlob: transitions.map((x) => x.explanation).join(" "),
+      positionBlob: sequenced.map((x) => x.positionReason).join(" "),
+    });
+  }
 
   return {
     tracks: sequenced,

@@ -18,11 +18,19 @@ const LOADING_COPY = [
 
 export default function AnalyzePage() {
   const router = useRouter();
-  const { isReadyToSequence, runSequence } = useFlow();
+  const { isReadyToSequence, runSequence, resolvedTracks, playlistTypeId } = useFlow();
   const [progress, setProgress] = useState(12);
   const [copyIndex, setCopyIndex] = useState(0);
 
   useEffect(() => {
+    if (resolvedTracks.length === 0) {
+      router.replace("/import");
+      return;
+    }
+    if (!playlistTypeId) {
+      router.replace("/playlist-type");
+      return;
+    }
     if (!isReadyToSequence) {
       router.replace("/flow");
       return;
@@ -51,7 +59,7 @@ export default function AnalyzePage() {
       window.clearTimeout(finalMoment);
       window.clearTimeout(done);
     };
-  }, [isReadyToSequence, router, runSequence]);
+  }, [isReadyToSequence, playlistTypeId, resolvedTracks.length, router, runSequence]);
 
   return (
     <AppFrame contentClassName="max-w-5xl">
@@ -102,8 +110,7 @@ export default function AnalyzePage() {
             </p>
             <h1 className="text-3xl font-semibold tracking-tight">Shuffling your journey</h1>
             <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
-              Flowlist is dealing a new order from imported metadata, mock mood analysis, and
-              prototype rhythm estimates.
+              Flowlist is dealing a new order from imported metadata, mock mood analysis, and prototype rhythm estimates.
             </p>
           </div>
 

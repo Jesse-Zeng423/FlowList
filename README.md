@@ -2,6 +2,45 @@
 
 Flowlist reorders playlists into a smoother **listening journey** using **emotional continuity**, **rhythmic continuity**, **energy progression**, and **user-chosen flow keywords** (intro → build → peak → cooldown → outro). It does **not** stream music, download audio/video, or run lyrics analysis.
 
+## Live Demo
+
+flow-list-kappa.vercel.app
+
+## What it does
+
+- Import public YouTube Music / YouTube playlists
+- Choose playlist type
+- Choose up to 2 flow keywords
+- Generate prototype listening order
+- View mood chapters, energy/rhythm arcs, and transition explanations
+
+## Best for
+
+- Mixed artists
+- Mood swings
+- Weird transitions
+- Long saved playlists
+
+## Tech Stack
+
+- Next.js
+- TypeScript
+- Tailwind CSS
+- YouTube Data API
+- Vercel
+
+## Limitations
+
+Flowlist currently uses metadata and prototype mood/rhythm estimates. It does not stream, download, or analyze audio. BPM values are approximate ranges. No real AI model or third-party BPM provider is connected yet.
+
+## Future Work
+
+- AI feature estimation
+- Third-party BPM provider
+- Better artist/title matching
+- Virtualized results for very large playlists
+- Export/copy workflow polish
+
 ## YouTube Music first
 
 The **primary import path** is a public **YouTube Music** or **YouTube** playlist URL. The app uses the **YouTube Data API v3** (server-side only) to read **playlist and video metadata** — titles, channels, thumbnails, links — then applies **mock sequencing** (not real AI yet).

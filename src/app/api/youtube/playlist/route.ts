@@ -4,6 +4,7 @@ import { cleanYouTubeTrackTitle } from "@/lib/youtube-title-clean";
 import type { NormalizedTrack } from "@/types/normalized-track";
 import type {
   YoutubeApiErrorPayload,
+  YoutubeImportLimit,
   YoutubePlaylistImportErrorCode,
   YoutubePlaylistImportResponse,
 } from "@/types/youtube-api";
@@ -11,7 +12,8 @@ import type {
 export const runtime = "nodejs";
 
 const YT = "https://www.googleapis.com/youtube/v3";
-const MAX_IMPORT = 100;
+const DEFAULT_IMPORT_LIMIT: YoutubeImportLimit = 200;
+const ALLOWED_IMPORT_LIMITS = new Set<number>([100, 200, 300]);
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -103,6 +105,21 @@ function errorJson(
   status: number,
 ): NextResponse<YoutubeApiErrorPayload> {
   return NextResponse.json({ error: { code, message, details } }, { status });
+}
+
+function readImportLimit(body: unknown): YoutubeImportLimit {
+  const raw = (body as { importLimit?: unknown }).importLimit;
+  if (typeof raw === "number" && ALLOWED_IMPORT_LIMITS.has(raw)) {
+    return raw as YoutubeImportLimit;
+  }
+  if (raw !== undefined) {
+    devLog("Invalid importLimit; falling back to default", {
+      importLimit: raw,
+      defaultImportLimit: DEFAULT_IMPORT_LIMIT,
+      allowed: [100, 200, 300],
+    });
+  }
+  return DEFAULT_IMPORT_LIMIT;
 }
 
 type YtThumbnail = { url?: string; width?: number; height?: number };
@@ -278,6 +295,7 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
       );
     }
     const url = sanitizeYouTubePlaylistUrlInput(urlField);
+    const importLimit = readImportLimit(body);
     if (!url) {
       return errorJson(
         "INVALID_URL",
@@ -288,7 +306,11 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
     }
 
     const playlistId = extractYouTubePlaylistId(url);
-    devLog("Extracted playlist id", { playlistId: playlistId ?? null, inputLength: url.length });
+    devLog("Extracted playlist id", {
+      playlistId: playlistId ?? null,
+      inputLength: url.length,
+      importLimit,
+    });
 
     if (!playlistId) {
       return errorJson(
@@ -344,8 +366,8 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
     let pageToken: string | undefined;
     let lastPageHadNext = false;
 
-    while (collected.length < MAX_IMPORT) {
-      const batch = Math.min(50, MAX_IMPORT - collected.length);
+    while (collected.length < importLimit) {
+      const batch = Math.min(50, importLimit - collected.length);
       const params: Record<string, string> = {
         part: "snippet,contentDetails",
         playlistId,
@@ -375,17 +397,19 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
       const page = itemsJson as PlaylistItemsResponse;
       const batchItems = page.items ?? [];
       for (const it of batchItems) {
-        if (collected.length >= MAX_IMPORT) break;
+        if (collected.length >= importLimit) break;
         collected.push(it);
       }
 
       lastPageHadNext = Boolean(page.nextPageToken);
       if (!page.nextPageToken || batchItems.length === 0) break;
       pageToken = page.nextPageToken;
-      if (collected.length >= MAX_IMPORT) break;
+      if (collected.length >= importLimit) break;
     }
 
     const tracks: NormalizedTrack[] = [];
+    let skippedMissingVideoId = 0;
+
     for (let i = 0; i < collected.length; i++) {
       const item = collected[i]!;
       const sn = item.snippet;
@@ -393,7 +417,10 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
         sn?.resourceId?.videoId ??
         item.contentDetails?.videoId ??
         (sn?.resourceId?.kind === "youtube#video" ? sn.resourceId.videoId : undefined);
-      if (!vid) continue;
+      if (!vid) {
+        skippedMissingVideoId++;
+        continue;
+      }
       const channelTitle = sn?.channelTitle?.trim() || playlistChannel || "Unknown channel";
       const rawVideoTitle = sn?.title?.trim() || "Untitled";
       const cleaned = cleanYouTubeTrackTitle(rawVideoTitle, channelTitle);
@@ -426,7 +453,7 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
 
     const totalHint = plItem.contentDetails?.itemCount;
     const truncated =
-      lastPageHadNext || (typeof totalHint === "number" && totalHint > MAX_IMPORT);
+      lastPageHadNext || (typeof totalHint === "number" && totalHint > importLimit);
 
     return NextResponse.json({
       ok: true,
@@ -438,7 +465,10 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
         externalUrl,
         trackCount: tracks.length,
         truncated,
-        importLimit: truncated ? MAX_IMPORT : null,
+        importLimit,
+        fetchedItemSlots: collected.length,
+        skippedMissingVideoId,
+        youtubeReportedTotalItems: typeof totalHint === "number" ? totalHint : null,
       },
       tracks,
     });

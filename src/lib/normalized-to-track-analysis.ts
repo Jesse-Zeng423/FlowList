@@ -3,17 +3,23 @@ import type { NormalizedTrack } from "@/types/normalized-track";
 import { buildMockTrackAnalysis } from "@/lib/parse-input";
 
 /**
- * Map platform-neutral rows to TrackAnalysis for mock sequencing.
+ * Map platform-neutral rows to TrackAnalysis for prototype sequencing. Channel name
+ * is forwarded as a hint source so YouTube imports get slightly more accurate
+ * rhythm/mood scores when the channel implies a genre context.
  */
 export function normalizedTracksToTrackAnalyses(rows: NormalizedTrack[]): TrackAnalysis[] {
   return rows.map((row, index) => {
-    const parsed = { title: row.title, artist: row.artist };
     const seed = `${row.source}:${row.platformTrackId}:${index}`;
     const albumLabel =
       row.source === "youtube"
         ? `YouTube · ${row.channelTitle}`
         : (row.album ?? row.channelTitle);
     const artistConfidence = row.artistConfidence ?? "parsed";
+    const parsed = {
+      title: row.title,
+      artist: row.artist,
+      channel: row.channelTitle ?? null,
+    };
     const base = buildMockTrackAnalysis(parsed, index, seed, albumLabel, artistConfidence);
     return {
       ...base,

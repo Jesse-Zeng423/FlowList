@@ -1,206 +1,278 @@
-import type { SequencedTrack, TransitionInsight } from "@/types/flowlist";
-import { DEFAULT_FLOW_IDS } from "@/lib/flow-options";
-import { normalizedFlowIds, primaryFlowArchetype } from "@/lib/flow-archetype";
+import type {
+  SequencedChapter,
+  SequencedTrack,
+  SoftLandingSummaryMeta,
+  TransitionInsight,
+} from "@/types/flowlist";
+import {
+  getFlowKeyword,
+  getPlaylistType,
+  type PlaylistType,
+} from "@/lib/flow-presets";
+import {
+  resolveStrategyFromKeywordIds,
+  type FlowCurveType,
+  type FlowExplanationTone,
+  type FlowStrategy,
+} from "@/lib/flow-strategies";
+import { transitionCostWithStrategy } from "@/lib/transition-cost";
 
-function tempoWord(t: SequencedTrack["tempoFeel"]): string {
-  if (t === "slow") return "slow";
-  if (t === "medium") return "steady mid-tempo";
-  return "faster, more driving";
-}
+/**
+ * Per-transition explanations using `transitionCostWithStrategy`.
+ *
+ * Each row is built from the actual reason fragments — never generic copy. We
+ * also append a short flow tag at the end so the user can see which strategy
+ * shaped the cut.
+ */
+export function buildTransitions(
+  tracks: SequencedTrack[],
+  playlistTypeId: string | null,
+  flowKeywordIds: string[],
+): TransitionInsight[] {
+  const labels = flowKeywordIds
+    .map((id) => getFlowKeyword(id)?.label)
+    .filter((s): s is string => Boolean(s));
+  const flowTag = labels[0] ? `Tuned for "${labels[0]}".` : null;
 
-function deltaEnergy(a: SequencedTrack, b: SequencedTrack): string {
-  const d = b.estimatedEnergy - a.estimatedEnergy;
-  if (Math.abs(d) <= 1) {
-    return "Energy stays in the same band, avoiding a jarring lift or drop.";
-  }
-  if (d > 0) {
-    return `Energy steps up modestly (${a.estimatedEnergy} → ${b.estimatedEnergy}) so the climb feels earned.`;
-  }
-  return `Energy eases down (${a.estimatedEnergy} → ${b.estimatedEnergy}) for a softer handoff.`;
-}
-
-function deltaDarkness(a: SequencedTrack, b: SequencedTrack): string | null {
-  const d = b.moodDarknessScore - a.moodDarknessScore;
-  if (Math.abs(d) < 8) return null;
-  if (d > 0) {
-    return "The mood becomes lighter here, letting brightness increase without a sudden genre whiplash.";
-  }
-  return "The palette grows heavier and more shadowed, deepening the emotional room.";
-}
-
-function rhythmNote(a: SequencedTrack, b: SequencedTrack): string {
-  const d = b.rhythmIntensityScore - a.rhythmIntensityScore;
-  if (a.tempoFeel === b.tempoFeel) {
-    if (Math.abs(d) < 12) {
-      return `The tempo feel stays ${a.tempoFeel}, keeping rhythmic identity consistent across the cut.`;
-    }
-    return `The tempo feel stays ${a.tempoFeel} while groove intensity shifts slightly (${a.rhythmIntensityScore} → ${b.rhythmIntensityScore}) for subtle motion.`;
-  }
-  return `Rhythm moves from ${tempoWord(a.tempoFeel)} to ${tempoWord(b.tempoFeel)} in a controlled step so the playlist does not feel abrupt.`;
-}
-
-function keywordHooks(ids: string[]): string[] {
-  const hooks: string[] = [];
-  if (ids.includes("dark_to_light")) {
-    hooks.push("the selected “from dark to light” flow");
-  }
-  if (ids.includes("light_to_dark")) {
-    hooks.push("the selected “from light to dark” flow");
-  }
-  if (ids.includes("gradually_uplifting")) {
-    hooks.push("a gradually uplifting arc");
-  }
-  if (ids.includes("reflective_cooldown")) {
-    hooks.push("a reflective cooldown toward the end");
-  }
-  if (ids.includes("late_night_emotional")) {
-    hooks.push("a late-night emotional through-line");
-  }
-  if (ids.includes("party_build_up") || ids.includes("workout_energy_rise")) {
-    hooks.push("a momentum-forward build");
-  }
-  if (ids.includes("romantic_slow_burn")) {
-    hooks.push("a romantic slow burn");
-  }
-  if (ids.includes("cinematic_arc")) {
-    hooks.push("a cinematic narrative shape");
-  }
-  if (ids.includes("calm_to_intense")) {
-    hooks.push("calm-to-intense progression");
-  }
-  if (ids.includes("intense_to_calm")) {
-    hooks.push("intense-to-calm release");
-  }
-  return hooks;
-}
-
-export function buildTransitions(tracks: SequencedTrack[], flowKeywordIds: string[]): TransitionInsight[] {
-  const hooks = keywordHooks(flowKeywordIds);
-  const hook = hooks.length ? hooks[0]! : "your chosen journey keywords";
+  const { combined: strategy } = resolveStrategyFromKeywordIds(flowKeywordIds);
+  void playlistTypeId;
 
   const out: TransitionInsight[] = [];
-  for (let i = 1; i < tracks.length; i++) {
+  const n = tracks.length;
+  for (let i = 1; i < n; i++) {
     const a = tracks[i - 1]!;
     const b = tracks[i]!;
-    const sentences: string[] = [];
+    const position = n > 1 ? i / (n - 1) : 0.5;
+    const { reasons } = transitionCostWithStrategy(a, b, strategy, { position });
 
-    const shared = a.flavorTags.filter((t) => b.flavorTags.includes(t));
-    if (shared.length) {
-      sentences.push(
-        `Shared ${shared.slice(0, 2).join(" / ")} DNA keeps tonal continuity while the set advances.`,
-      );
-    } else {
-      sentences.push("This handoff reframes the emotional color while keeping motion controlled.");
-      sentences.push(deltaEnergy(a, b));
+    const chosen = reasons.slice(0, 2);
+
+    const sharedTags = a.flavorTags.filter((tag) => b.flavorTags.includes(tag));
+    if (sharedTags.length && chosen.length < 3) {
+      chosen.push(`Shared ${sharedTags.slice(0, 2).join(" / ")} flavor keeps tonal continuity.`);
     }
 
-    const dark = deltaDarkness(a, b);
-    if (dark) sentences.push(dark);
-
-    sentences.push(rhythmNote(a, b));
-
-    if (hooks.length) {
-      sentences.push(`Overall sequencing bias reflects ${hook}.`);
-    }
-
-    const explanation = sentences.slice(0, 3).join(" ");
+    if (flowTag && chosen.length < 3) chosen.push(flowTag);
 
     out.push({
       fromIndex: i - 1,
       toIndex: i,
-      explanation,
+      explanation: chosen.length
+        ? chosen.join(" ")
+        : `Energy ${a.estimatedEnergy} → ${b.estimatedEnergy}, rhythm ${a.audioFeatures.rhythmIntensity} → ${b.audioFeatures.rhythmIntensity}.`,
     });
   }
   return out;
 }
 
-function moodSummaryForFlow(primary: string, keys: string[], trackCount: number): string {
-  const cinematicExtra =
-    primary !== "cinematic_arc" && keys.includes("cinematic_arc")
-      ? " Cinematic pacing still shapes how tension rises and resolves."
-      : "";
+// ---------------------------------------------------------------------------
+// Mood / rhythm summaries — strategy-driven
+// ---------------------------------------------------------------------------
 
-  switch (primary) {
-    case "intense_to_calm":
-      return `This prototype arc places stronger energy, rhythm, and emotional intensity earlier, then eases into calmer, softer territory — matching “intense to calm.”${cinematicExtra}`;
-    case "calm_to_intense":
-      return `The sequence starts steadier and climbs in energy and drive toward a stronger late push — aligned with “calm to intense.”${cinematicExtra}`;
-    case "dark_to_light":
-      return `Mood brightness and emotional lift trend upward across the ${trackCount} tracks, moving from heavier colors toward lighter space.${cinematicExtra}`;
-    case "light_to_dark":
-      return `The playlist gradually shifts into darker, weightier emotional territory rather than staying in a purely bright register.${cinematicExtra}`;
-    case "gradually_uplifting":
-      return `Emotional brightness and perceived lift increase in measured steps — a gradual uplift rather than a single jump.${cinematicExtra}`;
-    case "reflective_cooldown":
-      return `The ordering lands in softer, more introspective ground — room to cool down and reflect instead of pushing harder.${cinematicExtra}`;
-    case "party_build_up":
-    case "workout_energy_rise":
-      return `Rhythm and energy skew toward a late climb, like a warm-up that saves the biggest push for the final stretch.${cinematicExtra}`;
-    case "slow_emotional_build":
-      return `Intensity and vulnerability accrue slowly; the arc favors patience over early spikes.${cinematicExtra}`;
-    case "late_night_emotional":
-      return `The through-line stays intimate and nocturnal — close, subdued, and emotionally direct.${cinematicExtra}`;
-    case "romantic_slow_burn":
-      return `Tempo and intimacy deepen with restraint — romance without rushing the peak.${cinematicExtra}`;
-    case "cinematic_arc":
-    default:
-      return `This mock journey follows a narrative contour: space to breathe, a rising middle, a focal band, then resolution — classic cinematic pacing across ${trackCount} tracks.`;
+function moodSummaryByCurve(strategy: FlowStrategy, trackCount: number): string {
+  const c = strategy.curveType;
+  switch (c) {
+    case "linear-rise":
+      return `The arc lifts in measured steps from a steadier opening toward a brighter, higher-energy back third — across ${trackCount} tracks.`;
+    case "linear-fall":
+      return `Energy and intensity peak earlier and ease across ${trackCount} tracks toward a calmer landing.`;
+    case "wave":
+      return `The order alternates rises and releases so the playlist breathes in waves instead of one flat slope.`;
+    case "chaptered":
+      return `The playlist is organised into chapters, each with its own internal rhythm and emotional colour.`;
+    case "peak-centered":
+      return `The contour builds toward a focal high section and resolves around it — a peak-centred arc.`;
+    case "landing-focused":
+      return `The closing stretch is weighted toward lower intensity, softer rhythm, and more resolved tracks.`;
+    case "contrast-to-resolution":
+      return `The sequence starts with sharper contrast and gradually settles into resolution and emotional warmth.`;
+    case "stability-focused":
+      return `Adjacent tracks stay in the same energy and tempo neighbourhood — minimal disruption rather than dramatic motion.`;
+    case "cluster-run":
+      return `The strongest peak tracks are clustered into a focused central run rather than spread across the playlist.`;
+    case "loop":
+      return `The order is shaped to feel circular — the closing track sits comfortably next to the opener.`;
   }
 }
 
-function rhythmSummaryForFlow(
-  primary: string,
-  keys: string[],
+function rhythmSummaryByCurve(
+  strategy: FlowStrategy,
   first: SequencedTrack,
   last: SequencedTrack,
 ): string {
-  const cinematicExtra =
-    primary !== "cinematic_arc" && keys.includes("cinematic_arc")
-      ? " Narrative smoothing still governs how tempo steps are staged."
-      : "";
+  const span = `Groove intensity runs about ${first.audioFeatures.rhythmIntensity} → ${last.audioFeatures.rhythmIntensity} with ${first.audioFeatures.tempoFeel} → ${last.audioFeatures.tempoFeel} endcaps.`;
+  const c = strategy.curveType;
+  switch (c) {
+    case "linear-rise":
+      return `${span} Perceived rhythm intensity generally strengthens toward the back half.`;
+    case "linear-fall":
+      return `${span} Rhythmic drive is weighted earlier; later tracks ease toward sparser or steadier motion.`;
+    case "wave":
+      return `${span} Rhythm rises and releases in waves — short climbs followed by softer landings.`;
+    case "chaptered":
+      return `${span} Bigger rhythm shifts happen between chapters, not inside them.`;
+    case "peak-centered":
+      return `${span} Rhythmic staging follows a story shape: establish, rise, focal band, then release.`;
+    case "landing-focused":
+      return `${span} Later segments favour gentler motion and less aggressive groove.`;
+    case "contrast-to-resolution":
+      return `${span} Front-loaded contrast resolves into smoother groove by the end.`;
+    case "stability-focused":
+      return `${span} Adjacent tempo and groove changes are minimised so the listener can stay inside the playlist.`;
+    case "cluster-run":
+      return `${span} Rhythm stays tight inside the cluster run; the rest of the playlist acts as warm-up and cooldown.`;
+    case "loop":
+      return `${span} The closing rhythm is chosen to re-enter the opener with little disruption.`;
+  }
+}
 
-  const span = `Groove intensity runs about ${first.rhythmIntensityScore} → ${last.rhythmIntensityScore} with ${first.tempoFeel} → ${last.tempoFeel} endcaps.`;
-
-  switch (primary) {
-    case "intense_to_calm":
-      return `${span} Rhythmic drive is weighted earlier; later tracks ease toward sparser or steadier motion.${cinematicExtra}`;
-    case "calm_to_intense":
-    case "party_build_up":
-    case "workout_energy_rise":
-      return `${span} Perceived rhythm intensity generally strengthens toward the back half.${cinematicExtra}`;
-    case "reflective_cooldown":
-      return `${span} Later segments favor gentler motion and less aggressive groove.${cinematicExtra}`;
-    case "gradually_uplifting":
-      return `${span} Energy and rhythmic lift trend upward in small controlled steps.${cinematicExtra}`;
-    case "dark_to_light":
-    case "light_to_dark":
-      return `${span} Tempo feel is smoothed between cuts; the arc follows your light/dark mood keyword more than raw BPM.${cinematicExtra}`;
-    case "slow_emotional_build":
-      return `${span} Groove shifts stay gradual so emotional buildup can breathe.${cinematicExtra}`;
-    case "late_night_emotional":
-    case "romantic_slow_burn":
-      return `${span} Rhythmic changes stay understated — continuity matters more than impact.${cinematicExtra}`;
-    case "cinematic_arc":
+/** Tone the summary with playlist-type framing so different genres read differently. */
+function applyPlaylistTypeTone(
+  base: string,
+  type: PlaylistType | null,
+  curve: FlowCurveType,
+): string {
+  if (!type) return base;
+  switch (type.id) {
+    case "mixed_mess":
+      if (curve === "stability-focused" || curve === "contrast-to-resolution") {
+        return `${base} The order organises the messiest jumps into smoother chapters so the playlist starts to feel intentional rather than random.`;
+      }
+      return `${base} The mix's variety is preserved while harsh whiplash is reduced.`;
+    case "classical_score":
+      return `${base} The framing emphasises movement, contrast, and resolution — not motivational hype.`;
+    case "chill_lofi":
+      return `${base} Continuity and low-disruption motion take priority over dramatic peaks.`;
+    case "rnb_soul":
+      return `${base} Vocal warmth and emotional softness shape the handoffs.`;
+    case "hip_hop":
+      return `${base} Energy density and lyrical weight colour the focal sections.`;
+    case "rock_alt":
+      return `${base} Tension, release, and anthem moments shape the contour.`;
+    case "electronic_club":
+      return `${base} Pulse, build-ups, and release placement shape the contour.`;
+    case "pop_dance":
+      return `${base} Hooks and bright lift influence where the peak sits.`;
+    case "jazz_blues":
+      return `${base} Groove, swing, and atmosphere drive the smaller transitions.`;
     default:
-      return `${span} Rhythmic staging follows a story shape: establish, rise, focal band, then release.${cinematicExtra}`;
+      return base;
+  }
+}
+
+/** Strategy-flag overlays. */
+function applyFlagOverlays(strategy: FlowStrategy, mood: string, rhythm: string): {
+  mood: string;
+  rhythm: string;
+} {
+  let m = mood;
+  let r = rhythm;
+  if (strategy.flags.grandFinale) {
+    m += " The arc is reserved for an expansive closing section rather than fading away.";
+  }
+  if (strategy.flags.clusterRun && strategy.curveType !== "cluster-run") {
+    m += " The strongest peak tracks are pulled into a focused run rather than spread thinly.";
+  }
+  if (strategy.flags.loop) {
+    m += " The shape is designed to feel circular — easy to keep playing.";
+  }
+  if (strategy.flags.bridgeMode) {
+    r += " Bridge tracks sit between the most contrasting neighbours rather than being adjacent without a buffer.";
+  }
+  if (strategy.flags.surpriseAllowed) {
+    r += " Some surprise is preserved, but at least one of tempo, warmth, or rhythm carries continuity through each cut.";
+  }
+  if (strategy.flags.momentumRequired) {
+    r += " Long stalls are avoided so forward momentum holds across the playlist.";
+  }
+  return { mood: m, rhythm: r };
+}
+
+/** Tone tail. */
+function toneTail(tone: FlowExplanationTone): string {
+  switch (tone) {
+    case "cinematic":
+      return " The phrasing leans cinematic — movement, scale, and resolution.";
+    case "dramatic":
+      return " The phrasing leans dramatic — tension, contrast, and release.";
+    case "intimate":
+      return " The phrasing leans intimate — close, warm, low-key.";
+    case "club":
+      return " The phrasing leans club — pulse, rhythm, and hook placement.";
+    case "focused":
+      return " The phrasing leans focused — steadiness over drama.";
+    case "playful":
+      return " The phrasing leans playful — bright colour and movement.";
+    case "journey":
+    default:
+      return "";
   }
 }
 
 export function buildArcSummaries(
   tracks: SequencedTrack[],
+  playlistTypeId: string | null,
   flowKeywordIds: string[],
+  meta?: {
+    softLandingMeta?: SoftLandingSummaryMeta | null;
+    chapters?: SequencedChapter[] | null;
+  },
 ): { moodArcSummary: string; rhythmArcSummary: string } {
   if (tracks.length === 0) {
     return { moodArcSummary: "", rhythmArcSummary: "" };
   }
-  let keys = normalizedFlowIds(flowKeywordIds);
-  if (keys.length === 0) keys = [...DEFAULT_FLOW_IDS];
-  const primary = primaryFlowArchetype(keys);
+  const { combined: strategy } = resolveStrategyFromKeywordIds(flowKeywordIds);
+  const type = getPlaylistType(playlistTypeId);
   const first = tracks[0]!;
   const last = tracks[tracks.length - 1]!;
 
-  const moodArcSummary = moodSummaryForFlow(primary, keys, tracks.length);
-  const rhythmArcSummary = rhythmSummaryForFlow(primary, keys, first, last);
+  let mood = moodSummaryByCurve(strategy, tracks.length);
+  let rhythm = rhythmSummaryByCurve(strategy, first, last);
 
-  return { moodArcSummary, rhythmArcSummary };
+  ({ mood, rhythm } = applyFlagOverlays(strategy, mood, rhythm));
+
+  const hasMoodChapters = meta?.chapters?.some((c) => c.journeyRole != null);
+
+  // Soft landing — explicit wording in both mood + rhythm arcs.
+  if (strategy.flags.landingFocused && meta?.softLandingMeta) {
+    const m = meta.softLandingMeta;
+
+    mood += hasMoodChapters
+      ? " The resolving chapter pulls toward softer motion: slower—or steady—tempo, lower rhythmic drive, warmer or more emotionally resolved cues at the playlist end"
+      : " The closing arc pulls toward softer motion — slower—or steady—tempo, lower rhythmic drive, and warmer or more resolved emotional cues toward the playlist end";
+
+    if (m.endingGentlerRhythm && m.endingGentlerEnergy) {
+      rhythm +=
+        " Compared with the opener, rhythm intensity and headline energy taper for the softer landing.";
+    } else if (m.endingGentlerRhythm || m.endingGentlerEnergy) {
+      rhythm +=
+        " Rhythm or energy eases modestly toward the end, though it is not perfectly even track-to-track.";
+    } else {
+      rhythm +=
+        " Groove and energy stay similar to earlier sections — softer ordering had limited slack because most tracks skew one way.";
+    }
+    rhythm += " Soft Landing is biased as strongly as sequencing allows given this playlist.";
+    if (m.limitedByHomogeneity) {
+      mood += ", as much as this playlist allows";
+      rhythm +=
+        " If the catalogue is homogeneous, softness is capped — this is tightened as far as estimates allow.";
+    }
+    mood += ".";
+  }
+
+  // Chapter overview.
+  if (meta?.chapters && meta.chapters.length > 0) {
+    const labels = meta.chapters.map((c) => c.label).join(", ");
+    mood += ` Chapters: ${labels}.`;
+  }
+
+  mood = applyPlaylistTypeTone(mood, type, strategy.curveType);
+  mood += toneTail(strategy.explanationTone);
+
+  if (type) {
+    const typePrefix = `Playlist type: ${type.label}.`;
+    mood = `${typePrefix} ${mood}`;
+  }
+
+  return { moodArcSummary: mood, rhythmArcSummary: rhythm };
 }

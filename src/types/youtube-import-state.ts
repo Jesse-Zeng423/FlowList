@@ -1,4 +1,5 @@
 import type { TrackAnalysis } from "@/types/flowlist";
+import type { YoutubeImportLimit } from "@/types/youtube-api";
 
 export type YoutubeImportBundle = {
   importedUrl: string;
@@ -8,5 +9,8 @@ export type YoutubeImportBundle = {
   externalUrl: string;
   tracks: TrackAnalysis[];
   truncated: boolean;
-  importLimit: number | null;
+  importLimit: YoutubeImportLimit;
+  fetchedItemSlots: number;
+  skippedMissingVideoId: number;
+  youtubeReportedTotalItems: number | null;
 };

@@ -128,3 +128,73 @@
     @apply font-sans;
   }
 }
+
+@keyframes flow-card-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes flow-card-shuffle {
+  0% {
+    transform: translateX(0) translateY(0) rotate(var(--flow-rotate, 0deg));
+    opacity: 0.72;
+  }
+  24% {
+    transform: translateX(calc(var(--flow-spread, 1) * -36px)) translateY(-8px)
+      rotate(calc(var(--flow-rotate, 0deg) - 6deg));
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(calc(var(--flow-spread, 1) * 34px)) translateY(6px)
+      rotate(calc(var(--flow-rotate, 0deg) + 5deg));
+  }
+  76% {
+    transform: translateX(calc(var(--flow-spread, 1) * -12px)) translateY(0)
+      rotate(var(--flow-rotate, 0deg));
+  }
+  100% {
+    transform: translateX(0) translateY(0) rotate(var(--flow-rotate, 0deg));
+    opacity: 0.92;
+  }
+}
+
+@keyframes flow-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes result-bar-grow {
+  from {
+    transform: scaleY(0);
+    opacity: 0.2;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 0.85;
+  }
+}
+
+@layer utilities {
+  .flow-page-in {
+    animation: flow-page-in 420ms ease-out both;
+  }
+
+  .flow-card-float {
+    animation: flow-card-float 5s ease-in-out infinite;
+  }
+
+  .flow-card-shuffle {
+    animation: flow-card-shuffle 1.5s ease-in-out infinite;
+  }
+}

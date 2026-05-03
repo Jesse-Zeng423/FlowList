@@ -1,5 +1,6 @@
 import type { ArtistConfidence, TrackAnalysis } from "@/types/flowlist";
 import { MOCK_CATALOG } from "@/lib/mock-catalog";
+import { buildPrototypeAnalysisCore } from "@/lib/prototype-analysis";
 import { extractYouTubePlaylistId } from "@/lib/youtube-playlist-id";
 
 const SPOTIFY_PLAYLIST_RE =
@@ -106,7 +107,7 @@ export function parseTrackLine(line: string): { title: string; artist: string } 
   return { title: trimmed.slice(0, 200), artist: "Unknown artist" };
 }
 
-/** Deterministic pseudo-random 0..max from string (stable mock analysis). */
+/** Deterministic pseudo-random 0..max from string (used for stable id minting). */
 function hashToInt(seed: string, max: number): number {
   let h = 0;
   for (let i = 0; i < seed.length; i++) {
@@ -115,16 +116,13 @@ function hashToInt(seed: string, max: number): number {
   return max <= 0 ? 0 : h % (max + 1);
 }
 
-function tempoFromSeed(seed: string): TrackAnalysis["tempoFeel"] {
-  const r = hashToInt(seed + ":t", 2);
-  return r === 0 ? "slow" : r === 1 ? "medium" : "fast";
-}
-
 /**
- * Mock analysis for a parsed title/artist. Replace with model/API later.
+ * Build a prototype `TrackAnalysis` for a parsed title/artist line. Internally
+ * delegates to the deterministic feature generator so every track gets the new
+ * rhythm/mood/analysis nested model in addition to the legacy mirror fields.
  */
 export function buildMockTrackAnalysis(
-  parsed: { title: string; artist: string },
+  parsed: { title: string; artist: string; channel?: string | null },
   index: number,
   sourceLine: string,
   albumLabel: string,
@@ -132,43 +130,19 @@ export function buildMockTrackAnalysis(
 ): TrackAnalysis {
   const seed = `${sourceLine}:${index}:${parsed.title}:${parsed.artist}`;
   const id = `import-${hashToInt(seed, 1_000_000_000)}`;
-  const darkness = 15 + hashToInt(seed + ":d", 70);
-  const intensity = 25 + hashToInt(seed + ":i", 55);
-  const uplift = 20 + hashToInt(seed + ":u", 60);
-  const energy = 1 + hashToInt(seed + ":e", 9);
-  const rhythm = 15 + hashToInt(seed + ":r", 75);
-  const moods = [
-    "dreamy introspection",
-    "late-night glow",
-    "soft tension",
-    "hopeful drift",
-    "nocturnal pulse",
-    "cinematic hush",
-  ];
-  const mood = moods[hashToInt(seed + ":m", moods.length - 1)];
-  const flavors = [
-    ["reflective", "late-night"],
-    ["romantic", "nostalgic"],
-    ["cinematic", "melancholic"],
-    ["uplifting", "calm"],
-    ["intense", "cinematic"],
-  ];
-  const flavorTags = flavors[hashToInt(seed + ":f", flavors.length - 1)] ?? ["reflective"];
-
+  const core = buildPrototypeAnalysisCore({
+    title: parsed.title,
+    artist: parsed.artist,
+    channel: parsed.channel ?? null,
+    seed,
+  });
   return {
     id,
     title: parsed.title.slice(0, 200) || `Track ${index + 1}`,
     artist: parsed.artist.slice(0, 200),
     artistConfidence,
     album: albumLabel,
-    estimatedMood: mood,
-    estimatedEnergy: energy,
-    moodDarknessScore: darkness,
-    emotionalIntensityScore: intensity,
-    upliftScore: uplift,
-    tempoFeel: tempoFromSeed(seed),
-    rhythmIntensityScore: rhythm,
-    flavorTags,
+    ...core,
   };
 }
 

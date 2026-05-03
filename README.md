@@ -6,6 +6,14 @@ Flowlist reorders playlists into a smoother **listening journey** using **emotio
 
 The **primary import path** is a public **YouTube Music** or **YouTube** playlist URL. The app uses the **YouTube Data API v3** (server-side only) to read **playlist and video metadata** — titles, channels, thumbnails, links — then applies **mock sequencing** (not real AI yet).
 
+YouTube playlist imports are intentionally bounded. Choose an import depth in the UI:
+
+- **Quick scan** — first 100 tracks
+- **Standard** — first 200 tracks (default)
+- **Deep sequence** — first 300 tracks
+
+Large imports may take longer to analyze and use more YouTube API quota.
+
 ## Other ways to load tracks
 
 - **Manual paste** — one track per line (`Artist - Song`, `Song - Artist`, `Artist, Song`, etc.). Only your pasted text is used.

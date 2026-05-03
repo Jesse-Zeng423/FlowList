@@ -10,6 +10,8 @@ export type YoutubePlaylistImportErrorCode =
   | "EMPTY_PLAYLIST"
   | "UNKNOWN_SERVER_ERROR";
 
+export type YoutubeImportLimit = 100 | 200 | 300;
+
 export type YoutubeApiErrorPayload = {
   error: {
     code: YoutubePlaylistImportErrorCode;
@@ -29,7 +31,13 @@ export type YoutubePlaylistImportResponse =
         externalUrl: string;
         trackCount: number;
         truncated: boolean;
-        importLimit: number | null;
+        importLimit: YoutubeImportLimit;
+        /** Raw playlist slots read from YouTube (capped by importLimit pagination). */
+        fetchedItemSlots: number;
+        /** Rows skipped — no usable video ID (often private/deleted placeholders). */
+        skippedMissingVideoId: number;
+        /** YouTube-declared playlist size when available — may exceed playable imports. */
+        youtubeReportedTotalItems: number | null;
       };
       tracks: NormalizedTrack[];
     }

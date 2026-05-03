@@ -5,9 +5,11 @@ import { cn } from "@/lib/utils";
 export function AppFrame({
   children,
   className,
+  contentClassName,
 }: {
   children: ReactNode;
   className?: string;
+  contentClassName?: string;
 }) {
   return (
     <div
@@ -17,7 +19,12 @@ export function AppFrame({
       )}
     >
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_bottom,rgba(255,255,255,0.04),transparent_35%)]" />
-      <div className="relative z-10 mx-auto flex min-h-full w-full max-w-3xl flex-col px-5 pb-16 pt-10 sm:px-8 sm:pt-14">
+      <div
+        className={cn(
+          "relative z-10 mx-auto flex min-h-full w-full max-w-3xl flex-col px-5 pb-16 pt-10 sm:px-8 sm:pt-14",
+          contentClassName,
+        )}
+      >
         <header className="mb-10 flex items-center justify-between gap-4">
           <Link href="/" className="group inline-flex items-baseline gap-2">
             <span className="font-semibold tracking-tight text-foreground">Flowlist</span>

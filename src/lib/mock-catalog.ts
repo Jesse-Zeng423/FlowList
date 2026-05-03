@@ -1,7 +1,27 @@
-import type { TrackAnalysis } from "@/types/flowlist";
+import type { TempoFeel, TrackAnalysis } from "@/types/flowlist";
 
-/** Curated mock library. Real version: resolve Spotify IDs to enriched rows. */
-export const MOCK_CATALOG: TrackAnalysis[] = [
+/**
+ * Lookup-only catalog used to disambiguate manual "Artist - Title" parsing. The
+ * curated rows here intentionally omit the new richer rhythm/mood/analysis fields
+ * because they're never returned through `TrackAnalysis` to the sequencer; only
+ * `title` / `artist` are read. Keep the type narrow so adding entries stays cheap.
+ */
+export type MockCatalogEntry = Pick<
+  TrackAnalysis,
+  | "id"
+  | "title"
+  | "artist"
+  | "album"
+  | "estimatedMood"
+  | "estimatedEnergy"
+  | "moodDarknessScore"
+  | "emotionalIntensityScore"
+  | "upliftScore"
+  | "rhythmIntensityScore"
+  | "flavorTags"
+> & { tempoFeel: TempoFeel };
+
+export const MOCK_CATALOG: MockCatalogEntry[] = [
   {
     id: "mock-1",
     title: "Glass Hours",
@@ -256,9 +276,9 @@ export const MOCK_CATALOG: TrackAnalysis[] = [
   },
 ];
 
-const catalogByKey = new Map<string, TrackAnalysis>();
+const catalogByKey = new Map<string, MockCatalogEntry>();
 
-function catalogKeys(t: TrackAnalysis) {
+function catalogKeys(t: MockCatalogEntry) {
   const a = `${t.title} ${t.artist}`.toLowerCase().replace(/\s+/g, " ");
   const b = `${t.artist} ${t.title}`.toLowerCase();
   return [a, b, t.title.toLowerCase(), t.artist.toLowerCase()];
@@ -270,7 +290,7 @@ for (const t of MOCK_CATALOG) {
   }
 }
 
-export function findCatalogMatch(line: string): TrackAnalysis | undefined {
+export function findCatalogMatch(line: string): MockCatalogEntry | undefined {
   const norm = line.toLowerCase().trim().replace(/\s+/g, " ");
   if (!norm) return undefined;
   if (catalogByKey.has(norm)) return catalogByKey.get(norm);

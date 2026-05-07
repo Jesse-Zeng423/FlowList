@@ -2,21 +2,29 @@ import type { NormalizedTrack } from "@/types/normalized-track";
 
 export type YoutubePlaylistImportErrorCode =
   | "INVALID_URL"
+  | "VIDEO_LINK_NOT_PLAYLIST"
+  | "BODY_TOO_LARGE"
+  | "BLOCKED_ORIGIN"
   | "MISSING_YOUTUBE_API_KEY"
   | "YOUTUBE_API_403"
   | "YOUTUBE_API_404"
   | "YOUTUBE_API_QUOTA"
   | "YOUTUBE_API_NETWORK_ERROR"
+  | "YOUTUBE_API_TIMEOUT"
   | "EMPTY_PLAYLIST"
   | "UNKNOWN_SERVER_ERROR";
 
 export type YoutubeImportLimit = 100 | 200 | 300;
 
 export type YoutubeApiErrorPayload = {
+  /** Optional discriminator. Older clients ignore it; new clients can narrow on `ok`. */
+  ok?: false;
   error: {
     code: YoutubePlaylistImportErrorCode;
     message: string;
     details: string | null;
+    /** Present when the upstream returned `Retry-After`. Seconds. */
+    retryAfterSeconds?: number;
   };
 };
 

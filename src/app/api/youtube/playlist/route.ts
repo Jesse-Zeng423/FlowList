@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { extractYouTubePlaylistId, sanitizeYouTubePlaylistUrlInput } from "@/lib/youtube-playlist-id";
+import { fetchUpstream, type UpstreamResponse } from "@/lib/api/fetch-upstream-json";
+import { readBoundedJson } from "@/lib/api/read-json-body";
+import {
+  safeExternalUrl,
+  YOUTUBE_IMAGE_HOSTS,
+} from "@/lib/api/safe-external-url";
+import { sanitizeLogFields, truncForLog } from "@/lib/api/log";
+import { classifyYouTubePlaylistInput } from "@/lib/youtube-playlist-classify";
 import { cleanYouTubeTrackTitle } from "@/lib/youtube-title-clean";
 import type { NormalizedTrack } from "@/types/normalized-track";
 import type {
@@ -14,6 +21,11 @@ export const runtime = "nodejs";
 const YT = "https://www.googleapis.com/youtube/v3";
 const DEFAULT_IMPORT_LIMIT: YoutubeImportLimit = 200;
 const ALLOWED_IMPORT_LIMITS = new Set<number>([100, 200, 300]);
+const REQUEST_BODY_CAP_BYTES = 8 * 1024;
+
+const NO_STORE: ResponseInit = {
+  headers: { "Cache-Control": "no-store" },
+};
 
 const isDev = process.env.NODE_ENV === "development";
 const isProd = process.env.NODE_ENV === "production";
@@ -32,75 +44,21 @@ function clientCatchAllFailureDetails(thrown: unknown): string {
   if (isProd) return GENERIC_IMPORT_FAILURE_DETAILS;
   const message =
     thrown instanceof Error ? thrown.message : typeof thrown === "string" ? thrown : String(thrown);
-  const trimmed = message.trim();
-  if (trimmed.length <= 380) return trimmed;
-  return `${trimmed.slice(0, 380)}…`;
+  return truncForLog(message, 380);
 }
 
 function devLog(message: string, fields?: Record<string, unknown>) {
-  if (isDev) {
-    console.log("[flowlist:youtube-import]", message, fields ? JSON.stringify(fields) : "");
+  if (!isDev) return;
+  if (fields) {
+    console.debug("[flowlist:youtube-import]", message, sanitizeLogFields(fields));
+  } else {
+    console.debug("[flowlist:youtube-import]", message);
   }
 }
 
-function redactGoogleUrl(url: string): string {
-  return url.replace(/([?&])key=[^&]*/g, "$1key=***");
-}
-
-/** Full request URL with query string, with `key` removed (not masked). Safer than regex for logging. */
-function urlWithoutApiKey(fullUrl: string): string {
-  try {
-    const u = new URL(fullUrl);
-    u.searchParams.delete("key");
-    return u.toString();
-  } catch {
-    return redactGoogleUrl(fullUrl);
-  }
-}
-
-function serializeFetchError(e: unknown): {
-  name: string;
-  message: string;
-  cause: string | null;
-} {
-  if (!(e instanceof Error)) {
-    return { name: "Unknown", message: String(e), cause: null };
-  }
-  const { name, message, cause } = e;
-  let causeStr: string | null = null;
-  if (cause instanceof Error) {
-    causeStr = `${cause.name}: ${cause.message}`;
-  } else if (cause !== undefined && cause !== null) {
-    if (typeof cause === "object" && "message" in cause) {
-      causeStr = `${(cause as { name?: string }).name ?? "Error"}: ${String((cause as { message: unknown }).message)}`;
-    } else {
-      try {
-        causeStr = JSON.stringify(cause);
-      } catch {
-        causeStr = String(cause);
-      }
-    }
-  }
-  return { name, message, cause: causeStr };
-}
-
-function formatNetworkErrorDetails(ser: ReturnType<typeof serializeFetchError>): string {
-  const parts = [`${ser.name}: ${ser.message}`];
-  if (ser.cause) parts.push(`Cause: ${ser.cause}`);
-  return parts.join(" | ");
-}
-
-function networkErrorUserMessage(operation: "playlists.list" | "playlistItems.list"): string {
-  const base =
-    operation === "playlists.list"
-      ? "Could not reach the YouTube Data API to load the playlist."
-      : "Could not reach the YouTube Data API while listing playlist items.";
-  return `${base} This may be caused by local network, VPN, or proxy issues if this server cannot reach www.googleapis.com.`;
-}
-
-/** Always log fetch failures (prod + dev) so hosted/server logs help debug; never includes the API key. */
+/** Always log fetch failures (prod + dev) so hosted/server logs help debug. */
 function logYoutubeFetchFailure(fields: Record<string, unknown>) {
-  console.warn("[flowlist:youtube-import] fetch failed", JSON.stringify(fields));
+  console.warn("[flowlist:youtube-import] fetch failed", sanitizeLogFields(fields));
 }
 
 type GoogleApiErrorBody = {
@@ -112,19 +70,32 @@ type GoogleApiErrorBody = {
 };
 
 function readGoogleError(json: unknown): { message: string | null; reason: string | null } {
+  if (typeof json !== "object" || json === null) return { message: null, reason: null };
   const j = json as GoogleApiErrorBody;
   const message = j.error?.message ?? null;
   const reason = j.error?.errors?.[0]?.reason ?? null;
   return { message, reason };
 }
 
+type ErrorJsonOptions = {
+  retryAfterSeconds?: number;
+};
+
 function errorJson(
   code: YoutubePlaylistImportErrorCode,
   message: string,
   details: string | null,
   status: number,
+  options: ErrorJsonOptions = {},
 ): NextResponse<YoutubeApiErrorPayload> {
-  return NextResponse.json({ error: { code, message, details } }, { status });
+  const payload: YoutubeApiErrorPayload = {
+    ok: false,
+    error: { code, message, details },
+  };
+  if (typeof options.retryAfterSeconds === "number") {
+    payload.error.retryAfterSeconds = options.retryAfterSeconds;
+  }
+  return NextResponse.json(payload, { status, ...NO_STORE });
 }
 
 function readImportLimit(body: unknown): YoutubeImportLimit {
@@ -175,69 +146,75 @@ type PlaylistSnippetResponse = {
 
 function pickThumb(t: YtThumbnails | undefined): string | null {
   if (!t) return null;
-  return t.medium?.url ?? t.high?.url ?? t.default?.url ?? null;
+  const raw = t.medium?.url ?? t.high?.url ?? t.default?.url ?? null;
+  return safeExternalUrl(raw, YOUTUBE_IMAGE_HOSTS);
 }
 
 type YtFetchOperation = "playlists.list" | "playlistItems.list";
 
-async function ytFetchJson(
-  url: string,
+function networkErrorUserMessage(operation: YtFetchOperation): string {
+  const base =
+    operation === "playlists.list"
+      ? "Could not reach the YouTube Data API to load the playlist."
+      : "Could not reach the YouTube Data API while listing playlist items.";
+  return `${base} This may be caused by local network, VPN, or proxy issues if this server cannot reach www.googleapis.com.`;
+}
+
+async function callYouTube(
+  pathAndQuery: string,
+  apiKey: string,
   ctx: { playlistId: string; operation: YtFetchOperation },
-): Promise<
-  | { ok: true; status: number; json: unknown }
-  | { ok: false; kind: "network"; clientDetails: string }
-> {
-  const requestUrlWithoutKey = urlWithoutApiKey(url);
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    const rawText = await res.text();
-    let json: unknown = null;
-    if (rawText) {
-      try {
-        json = JSON.parse(rawText);
-      } catch {
-        json = { _parseNote: "response was not valid JSON", rawSnippet: rawText.slice(0, 200) };
-      }
-    }
-    const { message: googleMessage, reason: googleReason } = readGoogleError(json);
+): Promise<UpstreamResponse> {
+  const url = `${YT}${pathAndQuery}`;
+  const result = await fetchUpstream(
+    url,
+    {
+      headers: {
+        "X-Goog-Api-Key": apiKey,
+        Accept: "application/json",
+      },
+    },
+    { perCallMs: 8_000, retries: 1 },
+  );
+
+  if (result.ok) {
+    const { message: googleMessage, reason: googleReason } = readGoogleError(result.json);
     devLog("YouTube API response", {
       playlistId: ctx.playlistId,
       operation: ctx.operation,
-      requestUrlWithoutKey,
-      status: res.status,
-      googleMessage: googleMessage ?? undefined,
-      googleReason: googleReason ?? undefined,
+      url,
+      status: result.status,
+      googleMessage: googleMessage ?? "",
+      googleReason: googleReason ?? "",
+      parseError: result.parseError ?? "",
     });
-    return { ok: true, status: res.status, json };
-  } catch (e) {
-    const ser = serializeFetchError(e);
+  } else {
     logYoutubeFetchFailure({
       playlistId: ctx.playlistId,
       operation: ctx.operation,
-      requestUrlWithoutKey,
-      errorName: ser.name,
-      errorMessage: ser.message,
-      errorCause: ser.cause,
+      url,
+      kind: result.kind,
+      details: result.clientDetails,
     });
-    devLog("YouTube fetch threw (see also stderr warn)", {
-      playlistId: ctx.playlistId,
-      operation: ctx.operation,
-      requestUrlWithoutKey,
-      errorName: ser.name,
-      errorMessage: ser.message,
-      errorCause: ser.cause,
-    });
-    return { ok: false, kind: "network", clientDetails: formatNetworkErrorDetails(ser) };
   }
+
+  return result;
 }
 
 function mapGoogleFailure(
   status: number,
   json: unknown,
+  headers: Headers,
   context: string,
 ): NextResponse<YoutubeApiErrorPayload> {
   const { message: googleMessage, reason: googleReason } = readGoogleError(json);
   const details = googleMessage ?? `HTTP ${status} (${context})`;
+
+  const retryAfterRaw = headers.get("retry-after");
+  const retryAfterSeconds =
+    retryAfterRaw && Number.isFinite(Number.parseInt(retryAfterRaw, 10))
+      ? Math.max(0, Number.parseInt(retryAfterRaw, 10))
+      : undefined;
 
   if (status === 403) {
     const quotaReasons = new Set([
@@ -252,6 +229,7 @@ function mapGoogleFailure(
         "YouTube API quota or rate limit was exceeded. Try again later, use manual paste, or the demo playlist.",
         details,
         429,
+        { retryAfterSeconds },
       );
     }
     return errorJson(
@@ -271,6 +249,16 @@ function mapGoogleFailure(
     );
   }
 
+  if (status === 429) {
+    return errorJson(
+      "YOUTUBE_API_QUOTA",
+      "YouTube API rate limit was exceeded. Try again shortly.",
+      details,
+      429,
+      { retryAfterSeconds },
+    );
+  }
+
   const httpStatus =
     Number.isFinite(status) && status >= 400 && status < 600 ? status : 502;
   return errorJson(
@@ -279,6 +267,52 @@ function mapGoogleFailure(
     details,
     httpStatus,
   );
+}
+
+function classificationToError(
+  c: ReturnType<typeof classifyYouTubePlaylistInput>,
+): NextResponse<YoutubeApiErrorPayload> | null {
+  switch (c.kind) {
+    case "ok":
+      return null;
+    case "empty":
+      return errorJson(
+        "INVALID_URL",
+        "URL is empty after trimming.",
+        "Paste a full YouTube or YouTube Music playlist link.",
+        400,
+      );
+    case "video_link":
+      return errorJson(
+        "VIDEO_LINK_NOT_PLAYLIST",
+        "That looks like a single-video link, not a playlist URL.",
+        c.host === "youtu.be"
+          ? "youtu.be short links point at a single video. Open the playlist on YouTube and copy that link instead."
+          : "/watch URLs without a list= parameter point at a single video. Copy the playlist URL (containing list=…) instead.",
+        400,
+      );
+    case "non_youtube":
+      return errorJson(
+        "INVALID_URL",
+        "That URL is not a YouTube or YouTube Music link.",
+        `Hostname ${c.host} is not allowed.`,
+        400,
+      );
+    case "missing_list":
+      return errorJson(
+        "INVALID_URL",
+        "Could not read a playlist id from list=…. Paste a full YouTube or YouTube Music playlist URL.",
+        "After trimming and removing trailing backslashes, no valid list= parameter was found.",
+        400,
+      );
+    case "invalid_id":
+      return errorJson(
+        "INVALID_URL",
+        "Playlist id contains invalid characters.",
+        "Expected a list= value matching [a-zA-Z0-9_-]+.",
+        400,
+      );
+  }
 }
 
 export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistImportResponse>> {
@@ -293,19 +327,29 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
       );
     }
 
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
+    const parsed = await readBoundedJson<{
+      url?: unknown;
+      importLimit?: unknown;
+    }>(req, REQUEST_BODY_CAP_BYTES);
+    if (!parsed.ok) {
+      if (parsed.code === "BODY_TOO_LARGE") {
+        return errorJson(
+          "BODY_TOO_LARGE",
+          "Request body is too large.",
+          parsed.details,
+          413,
+        );
+      }
       return errorJson(
         "INVALID_URL",
         "Request body must be valid JSON with a url field.",
-        "Could not parse JSON body.",
+        parsed.details,
         400,
       );
     }
+    const body = parsed.body;
 
-    const urlField = (body as { url?: unknown }).url;
+    const urlField = body.url;
     if (typeof urlField !== "string") {
       return errorJson(
         "INVALID_URL",
@@ -314,60 +358,45 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
         400,
       );
     }
-    const url = sanitizeYouTubePlaylistUrlInput(urlField);
     const importLimit = readImportLimit(body);
-    if (!url) {
-      return errorJson(
-        "INVALID_URL",
-        "URL is empty after trimming.",
-        "Paste a full YouTube or YouTube Music playlist link.",
-        400,
-      );
-    }
 
-    const playlistId = extractYouTubePlaylistId(url);
-    devLog("Extracted playlist id", {
-      playlistId: playlistId ?? null,
-      inputLength: url.length,
+    const classification = classifyYouTubePlaylistInput(urlField);
+    devLog("Classified URL", {
+      kind: classification.kind,
+      inputLength: urlField.length,
       importLimit,
     });
-
-    if (!playlistId) {
-      return errorJson(
-        "INVALID_URL",
-        "Could not read a playlist id from list=…. Paste a full YouTube or YouTube Music playlist URL.",
-        "After trimming and removing trailing backslashes, no valid list= parameter was found.",
-        400,
-      );
+    const classificationError = classificationToError(classification);
+    if (classificationError) return classificationError;
+    if (classification.kind !== "ok") {
+      // Should be unreachable due to the early return above, but the type narrow is helpful.
+      return errorJson("INVALID_URL", "Unrecognized playlist input.", null, 400);
     }
+    const playlistId = classification.id;
 
-    const q = (params: Record<string, string>) => {
-      const u = new URLSearchParams({ ...params, key });
-      return u.toString();
-    };
+    const q = (params: Record<string, string>) => new URLSearchParams(params).toString();
 
-    const playlistsUrl = `${YT}/playlists?${q({ part: "snippet,contentDetails", id: playlistId })}`;
-    const plResult = await ytFetchJson(playlistsUrl, {
+    const playlistsPath = `/playlists?${q({ part: "snippet,contentDetails", id: playlistId })}`;
+    const plResult = await callYouTube(playlistsPath, key, {
       playlistId,
       operation: "playlists.list",
     });
     if (!plResult.ok) {
+      const code: YoutubePlaylistImportErrorCode =
+        plResult.kind === "timeout" ? "YOUTUBE_API_TIMEOUT" : "YOUTUBE_API_NETWORK_ERROR";
       return errorJson(
-        "YOUTUBE_API_NETWORK_ERROR",
+        code,
         networkErrorUserMessage("playlists.list"),
         clientNetworkFailureDetails(plResult.clientDetails),
-        502,
+        plResult.kind === "timeout" ? 504 : 502,
       );
     }
 
-    const { status: plStatus, json: plJson } = plResult;
-
-    if (plStatus < 200 || plStatus >= 300) {
-      return mapGoogleFailure(plStatus, plJson, "playlists.list");
+    if (plResult.status < 200 || plResult.status >= 300) {
+      return mapGoogleFailure(plResult.status, plResult.json, plResult.headers, "playlists.list");
     }
 
-    const plData = plJson as PlaylistSnippetResponse;
-
+    const plData = plResult.json as PlaylistSnippetResponse;
     const plItem = plData.items?.[0];
     if (!plItem?.id) {
       return errorJson(
@@ -395,26 +424,34 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
       };
       if (pageToken) params.pageToken = pageToken;
 
-      const itemsUrl = `${YT}/playlistItems?${q(params)}`;
-      const itemsResult = await ytFetchJson(itemsUrl, {
+      const itemsPath = `/playlistItems?${q(params)}`;
+      const itemsResult = await callYouTube(itemsPath, key, {
         playlistId,
         operation: "playlistItems.list",
       });
       if (!itemsResult.ok) {
+        const code: YoutubePlaylistImportErrorCode =
+          itemsResult.kind === "timeout"
+            ? "YOUTUBE_API_TIMEOUT"
+            : "YOUTUBE_API_NETWORK_ERROR";
         return errorJson(
-          "YOUTUBE_API_NETWORK_ERROR",
+          code,
           networkErrorUserMessage("playlistItems.list"),
           clientNetworkFailureDetails(itemsResult.clientDetails),
-          502,
+          itemsResult.kind === "timeout" ? 504 : 502,
         );
       }
 
-      const { status: itemsStatus, json: itemsJson } = itemsResult;
-      if (itemsStatus < 200 || itemsStatus >= 300) {
-        return mapGoogleFailure(itemsStatus, itemsJson, "playlistItems.list");
+      if (itemsResult.status < 200 || itemsResult.status >= 300) {
+        return mapGoogleFailure(
+          itemsResult.status,
+          itemsResult.json,
+          itemsResult.headers,
+          "playlistItems.list",
+        );
       }
 
-      const page = itemsJson as PlaylistItemsResponse;
+      const page = itemsResult.json as PlaylistItemsResponse;
       const batchItems = page.items ?? [];
       for (const it of batchItems) {
         if (collected.length >= importLimit) break;
@@ -475,23 +512,26 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
     const truncated =
       lastPageHadNext || (typeof totalHint === "number" && totalHint > importLimit);
 
-    return NextResponse.json({
-      ok: true,
-      playlist: {
-        id: playlistId,
-        title: playlistTitle,
-        channelTitle: playlistChannel,
-        source: "youtube",
-        externalUrl,
-        trackCount: tracks.length,
-        truncated,
-        importLimit,
-        fetchedItemSlots: collected.length,
-        skippedMissingVideoId,
-        youtubeReportedTotalItems: typeof totalHint === "number" ? totalHint : null,
+    return NextResponse.json(
+      {
+        ok: true,
+        playlist: {
+          id: playlistId,
+          title: playlistTitle,
+          channelTitle: playlistChannel,
+          source: "youtube" as const,
+          externalUrl,
+          trackCount: tracks.length,
+          truncated,
+          importLimit,
+          fetchedItemSlots: collected.length,
+          skippedMissingVideoId,
+          youtubeReportedTotalItems: typeof totalHint === "number" ? totalHint : null,
+        },
+        tracks,
       },
-      tracks,
-    });
+      NO_STORE,
+    );
   } catch (e) {
     console.error("[flowlist:youtube-import] unhandled error", e);
     devLog("Unhandled server error (see stderr)", {

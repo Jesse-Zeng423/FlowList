@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   BadgeCheck,
@@ -93,6 +93,24 @@ function importDepthCardinalityNote(bundle: {
   return notes;
 }
 
+/**
+ * Reads `?demo=1` via Next.js's App Router hook (instead of `window.location.search`)
+ * so the App Router knows about the dependency. Wrapped in `<Suspense>` from the
+ * parent because Next 16 deopts pages that read `useSearchParams` outside Suspense.
+ */
+function DemoQueryBootstrap({ onDemo }: { onDemo: () => void }) {
+  const params = useSearchParams();
+  const triggered = useRef(false);
+  useEffect(() => {
+    if (triggered.current) return;
+    if (params.get("demo") === "1") {
+      triggered.current = true;
+      onDemo();
+    }
+  }, [params, onDemo]);
+  return null;
+}
+
 export default function PlaylistPage() {
   const router = useRouter();
   const {
@@ -115,13 +133,12 @@ export default function PlaylistPage() {
   const [spotifyBusy, setSpotifyBusy] = useState(false);
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
   const [spotifyError, setSpotifyError] = useState<string | null>(null);
-  const [importMode, setImportMode] = useState<ImportMode>(() => {
-    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demo") === "1") {
-      return "demo";
-    }
-    return "youtube";
-  });
-  const demoLoadedFromQuery = useRef(false);
+  const [importMode, setImportMode] = useState<ImportMode>("youtube");
+
+  const handleDemoFromQuery = () => {
+    setImportMode("demo");
+    loadDemoPlaylist();
+  };
 
   const ytCardinalityNotes = useMemo(
     () => (youtubeImport != null ? importDepthCardinalityNote(youtubeImport) : []),
@@ -131,15 +148,6 @@ export default function PlaylistPage() {
   const youtubeReady = playlistSource === "youtube" && Boolean(youtubeImport);
   const spotifyReady = playlistSource === "spotify" && Boolean(spotifyImport);
   const canContinue = resolvedTracks.length > 0;
-
-  useEffect(() => {
-    if (demoLoadedFromQuery.current) return;
-    if (typeof window === "undefined") return;
-    if (new URLSearchParams(window.location.search).get("demo") === "1") {
-      loadDemoPlaylist();
-      demoLoadedFromQuery.current = true;
-    }
-  }, [loadDemoPlaylist]);
 
   async function handleYouTubeImport() {
     setYoutubeError(null);
@@ -241,6 +249,9 @@ export default function PlaylistPage() {
 
   return (
     <AppFrame contentClassName="max-w-5xl">
+      <Suspense fallback={null}>
+        <DemoQueryBootstrap onDemo={handleDemoFromQuery} />
+      </Suspense>
       <div className="flow-page-in flex flex-1 flex-col gap-5 pb-24">
         <FlowStepper current={0} />
 

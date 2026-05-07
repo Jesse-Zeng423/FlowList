@@ -455,7 +455,7 @@ function TrackCard({
             alt={track.album}
             width={44}
             height={44}
-            unoptimized
+            sizes="44px"
             className="size-11 shrink-0 rounded-xl object-cover ring-1 ring-white/10"
           />
         ) : (

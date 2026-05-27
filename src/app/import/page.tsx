@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   BadgeCheck,
@@ -24,7 +24,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { parseImportApiResponse } from "@/lib/import-api-response";
 import { normalizedTracksToTrackAnalyses } from "@/lib/normalized-to-track-analysis";
 import { spotifyRowsToTrackAnalyses } from "@/lib/spotify-map-tracks";
-import { isApiErrorPayload } from "@/types/api";
 import type { SpotifyPlaylistImportResponse } from "@/types/spotify-api";
 import {
   isYoutubeApiErrorPayload,
@@ -40,6 +39,24 @@ const IMPORT_DEPTH_OPTIONS: Array<{ value: YoutubeImportLimit; label: string }> 
   { value: 200, label: "200" },
   { value: 300, label: "300" },
 ];
+
+/**
+ * Reads `?demo=1` via Next.js's App Router hook (instead of `window.location.search`)
+ * so the App Router knows about the dependency. Wrapped in `<Suspense>` from the
+ * parent because Next 16 deopts pages that read `useSearchParams` outside Suspense.
+ */
+function DemoQueryBootstrap({ onDemo }: { onDemo: () => void }) {
+  const params = useSearchParams();
+  const triggered = useRef(false);
+  useEffect(() => {
+    if (triggered.current) return;
+    if (params.get("demo") === "1") {
+      triggered.current = true;
+      onDemo();
+    }
+  }, [params, onDemo]);
+  return null;
+}
 
 export default function PlaylistPage() {
   const router = useRouter();
@@ -64,21 +81,13 @@ export default function PlaylistPage() {
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
   const [spotifyError, setSpotifyError] = useState<string | null>(null);
   const [importMode, setImportMode] = useState<ImportMode>("youtube");
-  const demoLoadedFromQuery = useRef(false);
+
+  const handleDemoFromQuery = () => {
+    setImportMode("demo");
+    loadDemoPlaylist();
+  };
+
   const canContinue = resolvedTracks.length > 0;
-
-  useEffect(() => {
-    if (demoLoadedFromQuery.current || typeof window === "undefined") return;
-    if (new URLSearchParams(window.location.search).get("demo") !== "1") return;
-    const timer = window.setTimeout(() => {
-      if (demoLoadedFromQuery.current) return;
-      demoLoadedFromQuery.current = true;
-      setImportMode("demo");
-      loadDemoPlaylist();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [loadDemoPlaylist]);
-
   async function handleYouTubeImport() {
     setYoutubeError(null);
     setYoutubeBusy(true);
@@ -164,18 +173,30 @@ export default function PlaylistPage() {
         return;
       }
       const data = parsed.data;
-      if (isApiErrorPayload(data)) {
-        setSpotifyError(data.error.message);
-        return;
-      }
       if (
         typeof data !== "object" ||
         data === null ||
         !("ok" in data) ||
-        data.ok !== true ||
-        !("playlist" in data) ||
-        !("tracks" in data)
+        data.ok !== true
       ) {
+        if (
+          typeof data === "object" &&
+          data !== null &&
+          "ok" in data &&
+          data.ok === false &&
+          "error" in data &&
+          typeof data.error === "object" &&
+          data.error !== null &&
+          "message" in data.error &&
+          typeof data.error.message === "string"
+        ) {
+          setSpotifyError(data.error.message);
+          return;
+        }
+        setSpotifyError("Network error. YouTube and manual paste still work.");
+        return;
+      }
+      if (!("playlist" in data) || !("tracks" in data)) {
         setSpotifyError("Network error. YouTube and manual paste still work.");
         return;
       }
@@ -198,6 +219,9 @@ export default function PlaylistPage() {
 
   return (
     <AppFrame contentClassName="max-w-[42rem]">
+      <Suspense fallback={null}>
+        <DemoQueryBootstrap onDemo={handleDemoFromQuery} />
+      </Suspense>
       <div className="flow-page-in flex flex-1 flex-col gap-4 pb-3">
         <FlowStepper current={0} />
         <StepHeader

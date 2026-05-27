@@ -6,7 +6,6 @@ import { Layers3, Shuffle, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppFrame } from "@/components/app-frame";
-import { FlowStepper } from "@/components/flow-stepper";
 import { useFlow } from "@/components/flow-provider";
 import { Progress } from "@/components/ui/progress";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -14,11 +13,10 @@ import { cn } from "@/lib/utils";
 import type { SequencedPlaylist } from "@/types/flowlist";
 
 const LOADING_COPY = [
-  "Reading playlist metadata...",
-  "Cleaning track titles...",
-  "Estimating mood and rhythm...",
-  "Testing transitions...",
-  "Dealing the journey...",
+  "Reading playlist metadata",
+  "Finding transition paths",
+  "Balancing energy",
+  "Dealing the final order",
 ] as const;
 
 /** Match prior UX (~1.85s) while allowing generation to flush to context first. */
@@ -141,6 +139,7 @@ export default function AnalyzePage() {
       }
 
       stopLoadingUi();
+      try { window.sessionStorage.setItem("flowlist:fresh-result", "1"); } catch {}
       router.replace("/results");
     })();
 
@@ -161,9 +160,8 @@ export default function AnalyzePage() {
     return (
       <AppFrame contentClassName="max-w-xl">
         <div className="flow-page-in flex flex-1 flex-col gap-6 pb-24">
-          <FlowStepper current={3} />
-          <div className="rounded-[1.75rem] border border-rose-500/35 bg-rose-500/10 p-6 text-sm leading-relaxed text-rose-50/95">
-            <p className="text-lg font-semibold tracking-tight">{generationError}</p>
+          <div className="table-panel mt-14 rounded-xl p-6 text-sm leading-relaxed text-rose-50/95">
+            <p className="flow-display text-xl font-semibold">{generationError}</p>
             <p className="mt-2 text-rose-100/85">
               Check your playlist and flow selections, then run the sequence again.
             </p>
@@ -194,61 +192,52 @@ export default function AnalyzePage() {
   }
 
   return (
-    <AppFrame contentClassName="max-w-5xl">
-      <div className="flow-page-in flex flex-1 flex-col gap-10">
-        <FlowStepper current={3} />
-
-        <div className="flex flex-1 flex-col items-center justify-center gap-10 py-12 text-center">
-          <div className="relative h-52 w-full max-w-md">
-            <div className="absolute inset-0 rounded-[2rem] border border-violet-300/15 bg-violet-500/10 blur-3xl" />
+    <AppFrame contentClassName="max-w-xl">
+      <div className="flow-page-in flex flex-1 flex-col">
+        <div className="flex flex-1 flex-col items-center justify-center gap-7 pb-14 text-center">
+          <div className="relative h-36 w-56">
             {[0, 1, 2, 3, 4].map((i) => (
               <div
                 key={i}
-                className="absolute left-1/2 top-1/2 h-36 w-24 -translate-x-1/2 -translate-y-1/2"
+                className="absolute left-1/2 top-1/2 h-28 w-[76px] -translate-x-1/2 -translate-y-1/2"
                 style={{
-                  marginLeft: `${(i - 2) * 18}px`,
-                  marginTop: `${Math.abs(i - 2) * 8}px`,
+                  marginLeft: `${(i - 2) * 14}px`,
+                  marginTop: `${Math.abs(i - 2) * 5}px`,
                   zIndex: i,
                 }}
               >
                 <div
-                  className="flow-card-shuffle flex h-full flex-col justify-between rounded-2xl border border-white/12 bg-black/45 p-3 shadow-2xl shadow-black/40 backdrop-blur-xl"
+                  data-card-scale="compact"
+                  className="music-card flow-card-shuffle flex h-full flex-col justify-between rounded-lg p-2.5"
                   style={{
                     animationDelay: `${i * 120}ms`,
                     ["--flow-spread" as string]: i - 2 || 1,
                     ["--flow-rotate" as string]: `${(i - 2) * 2}deg`,
                   }}
                 >
-                  <span className="text-[9px] font-bold uppercase tracking-[0.22em] text-violet-100/55">
+                  <span className="relative z-10 text-[8px] font-bold uppercase tracking-[0.18em] text-[#59554e]">
                     flow
                   </span>
                   {i === 2 ? (
-                    <Shuffle className="mx-auto size-7 text-violet-100" />
+                    <Shuffle className="relative z-10 mx-auto size-6 text-[#242321]" />
                   ) : i % 2 === 0 ? (
-                    <Layers3 className="mx-auto size-6 text-white/45" />
+                    <Layers3 className="relative z-10 mx-auto size-5 text-[#4f4c47]" />
                   ) : (
-                    <Sparkles className="mx-auto size-6 text-amber-100/60" />
+                    <Sparkles className="relative z-10 mx-auto size-5 text-[#8f1d2c]" />
                   )}
-                  <span className="text-center text-[10px] text-muted-foreground">mock</span>
+                  <span className="relative z-10 text-center text-[9px] text-[#5e5952]">FL</span>
                 </div>
               </div>
             ))}
           </div>
 
-          <div className="flex flex-col items-center gap-4">
-            <p className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-muted-foreground">
-              <Sparkles className="size-3.5 text-violet-200" />
-              Prototype sequencing · estimated audio features
-            </p>
-            <h1 className="text-3xl font-semibold tracking-tight">Shuffling your journey</h1>
-            <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
-              Flowlist is dealing a new order from imported metadata, mock mood analysis, and prototype rhythm estimates.
-            </p>
+          <div>
+            <h1 className="flow-display text-3xl font-semibold text-[#fbf2e2]">Dealing your sequence...</h1>
           </div>
 
           <div className="w-full max-w-sm space-y-3">
             <Progress value={progress} className="h-1.5 bg-white/10" />
-            <p className="text-xs text-violet-100/90">{LOADING_COPY[copyIndex]}</p>
+            <p className="text-xs text-[#d8e3dc]">{LOADING_COPY[copyIndex]}</p>
           </div>
         </div>
       </div>

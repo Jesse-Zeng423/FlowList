@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { extractYouTubePlaylistId, sanitizeYouTubePlaylistUrlInput } from "@/lib/youtube-playlist-id";
 import { cleanYouTubeTrackTitle } from "@/lib/youtube-title-clean";
+import {
+  IMPORT_REQUEST_BODY_LIMIT_BYTES,
+  readBoundedJson,
+  RequestBodyTooLargeError,
+} from "@/lib/read-bounded-json";
 import type { NormalizedTrack } from "@/types/normalized-track";
 import type {
   YoutubeApiErrorPayload,
@@ -295,8 +300,16 @@ export async function POST(req: Request): Promise<NextResponse<YoutubePlaylistIm
 
     let body: unknown;
     try {
-      body = await req.json();
-    } catch {
+      body = await readBoundedJson(req);
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        return errorJson(
+          "INVALID_URL",
+          "Request body is too large.",
+          `Playlist import requests must be at most ${IMPORT_REQUEST_BODY_LIMIT_BYTES} bytes.`,
+          413,
+        );
+      }
       return errorJson(
         "INVALID_URL",
         "Request body must be valid JSON with a url field.",

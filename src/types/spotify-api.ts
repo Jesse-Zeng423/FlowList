@@ -1,5 +1,7 @@
 /** Client-facing shape returned by POST /api/spotify/playlist */
 
+import type { ApiErrorPayload } from "@/types/api";
+
 export type SpotifyPlaylistImportResponse =
   | {
       ok: true;
@@ -12,14 +14,7 @@ export type SpotifyPlaylistImportResponse =
       };
       tracks: SpotifyImportedTrackRow[];
     }
-  | {
-      ok: false;
-      error: {
-        code: SpotifyPlaylistImportErrorCode;
-        message: string;
-        retryAfterSeconds?: number;
-      };
-    };
+  | ({ ok: false } & ApiErrorPayload<SpotifyPlaylistImportErrorCode>);
 
 export type SpotifyPlaylistImportErrorCode =
   | "INVALID_URL"

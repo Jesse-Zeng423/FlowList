@@ -1,10 +1,32 @@
 "use client";
 
-import { Check, Lock, Shuffle, Waves, Flame, Sparkles, Moon, Zap } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { Check, Flame, Lock, Moon, Shuffle, Sparkles, Waves, Zap } from "lucide-react";
 import type { FlowKeyword } from "@/lib/flow-presets";
+import { playCardDeal, playCardFlip, playCardTap } from "@/lib/sound-effects";
 import { cn } from "@/lib/utils";
 
 const FLOW_ICONS = [Waves, Shuffle, Sparkles, Flame, Moon, Zap] as const;
+
+const MIXED_MESS_SHORT_COPY: Record<string, string> = {
+  "mixed_mess.chaos_to_coherence": "Turn rough jumps into a path.",
+  "mixed_mess.surprise_but_smooth": "Keep contrast without whiplash.",
+  "mixed_mess.mood_chapters": "Break into emotional sections.",
+  "mixed_mess.soft_landing": "Let the ending settle.",
+  "mixed_mess.energy_wave": "Move through rises and releases.",
+  "mixed_mess.genre_bridge": "Connect different musical worlds.",
+};
+
+function shortDescription(keyword: FlowKeyword) {
+  return MIXED_MESS_SHORT_COPY[keyword.id] ?? keyword.description;
+}
+
+function flowSuit(keyword: FlowKeyword) {
+  if (/(landing|closure|romantic|intimacy|heartbreak|warm|serenity|gentle|emotional)/i.test(keyword.label)) return "♥";
+  if (/(energy|peak|rise|banger|drop|anthem|victory|finale|release)/i.test(keyword.label)) return "♦";
+  if (/(bridge|smooth|continuity|groove|flow|drift|loop)/i.test(keyword.label)) return "♣";
+  return "♠";
+}
 
 export function FlowCard({
   keyword,
@@ -23,79 +45,114 @@ export function FlowCard({
   disabled: boolean;
   conflictLabel: string | null;
   conflictMessage: string | null;
-  /** Softer pairwise note when ≥1 keyword is already selected */
   tensionHint?: string | null;
   pairsWell?: boolean;
   onSelect: () => void;
 }) {
   const Icon = FLOW_ICONS[index % FLOW_ICONS.length] ?? Waves;
   const conflict = Boolean(conflictMessage);
+  const descriptionId = `flow-keyword-${keyword.id}-description`;
+
+  // Play flip sound when this card newly becomes locked (null → non-null transition only).
+  const wasLockedRef = useRef(conflict);
+  useEffect(() => {
+    if (conflict && !wasLockedRef.current) playCardFlip();
+    wasLockedRef.current = conflict;
+  }, [conflict]);
+  const compatibility = pairsWell ? " Pairs well with selected movement." : tensionHint ? " Tension with selected movement." : "";
+  const accessibleLabel = conflict
+    ? `${keyword.label}. Locked. Conflicts with ${conflictLabel ?? "a selected flow keyword"}.`
+    : selected
+      ? `Remove ${keyword.label} from selected movement.`
+      : disabled
+        ? `Select flow keyword: ${keyword.label}. Maximum of 2 flow keywords already selected.`
+        : `Select flow keyword: ${keyword.label}.${compatibility}`;
+  const visibleDescription = shortDescription(keyword);
+  const suit = flowSuit(keyword);
+  const redSuit = suit === "♥" || suit === "♦";
 
   return (
     <button
       type="button"
-      onClick={onSelect}
-      disabled={disabled}
+      onClick={() => {
+        if (selected) { playCardTap(); onSelect(); }
+        else if (!disabled) { playCardDeal(); onSelect(); }
+      }}
+      aria-disabled={disabled}
       aria-pressed={selected}
+      aria-label={accessibleLabel}
+      aria-describedby={descriptionId}
       className={cn(
-        "group relative min-h-36 overflow-hidden rounded-[1.25rem] border p-3 text-left shadow-xl shadow-black/15 backdrop-blur-xl transition-all duration-300",
-        selected
-          ? "-translate-y-1 rotate-[-1deg] border-violet-200/55 bg-violet-500/15 shadow-[0_0_40px_rgba(139,92,246,0.22)]"
-          : conflict
-            ? "cursor-not-allowed border-white/5 bg-[linear-gradient(135deg,rgba(255,255,255,0.05),rgba(139,92,246,0.05))] opacity-70"
-            : disabled
-              ? "cursor-not-allowed border-white/5 bg-black/20 opacity-50"
-              : "border-white/10 bg-white/[0.045] hover:-translate-y-1 hover:border-white/20 hover:bg-white/[0.07]",
+        "music-card-shell group relative h-[128px] w-full text-left",
+        disabled && !conflict && "cursor-not-allowed opacity-55",
+        conflict && "cursor-not-allowed",
       )}
     >
-      {conflict ? (
-        <div className="absolute inset-0 bg-[repeating-linear-gradient(135deg,rgba(255,255,255,0.06)_0px,rgba(255,255,255,0.06)_1px,transparent_1px,transparent_10px)]" />
-      ) : (
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(167,139,250,0.16),transparent_48%)] opacity-80" />
-      )}
-      <div className="relative flex h-full flex-col">
-        <div className="mb-4 flex items-start justify-between">
-          <span className="text-[9px] font-bold uppercase tracking-[0.24em] text-violet-100/60">
-            flow
-          </span>
-          {conflict ? <Lock className="size-4 text-muted-foreground" /> : <Icon className="size-4 text-violet-100/75" />}
-        </div>
-
-        {conflict ? (
-          <div className="mt-auto space-y-2">
-            <p className="text-sm font-semibold text-foreground/80">Card locked</p>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {conflictLabel ? `Conflicts with ${conflictLabel}. ${conflictMessage ?? ""}` : conflictMessage}
-            </p>
-          </div>
-        ) : (
-          <>
-            <div className="space-y-1.5">
-              <h3 className="text-base font-semibold tracking-tight text-foreground">{keyword.label}</h3>
-              <p className="max-h-10 overflow-hidden text-xs leading-relaxed text-muted-foreground">
-                {keyword.description}
-              </p>
-            </div>
-            {!selected && tensionHint ? (
-              <p className="mt-2 text-[10px] leading-snug text-amber-100/72">{tensionHint}</p>
-            ) : null}
-            {!selected && pairsWell ? (
-              <p className="mt-1 text-[10px] font-medium leading-snug text-emerald-100/72">Pairs well together.</p>
-            ) : null}
-            <div className="mt-auto pt-3">
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1 text-xs font-medium",
-                  selected ? "text-violet-100" : "text-muted-foreground",
-                )}
-              >
-                {selected ? <Check className="size-3.5" /> : null}
-                {selected ? "In movement tray" : disabled ? "Max 2 selected" : "Select movement"}
+      <span id={descriptionId} className="sr-only">
+        {conflict
+          ? `Locked. Conflicts with ${conflictLabel ?? "selected movement"}.`
+          : visibleDescription}
+      </span>
+      <span className="music-card-inner block rounded-xl" data-locked={conflict}>
+        <span
+          aria-hidden={conflict}
+          data-suit={suit}
+          data-suit-tone={redSuit ? "red" : "black"}
+          data-card-scale="compact"
+          className={cn(
+            "music-card-face music-card-front flex flex-col p-3",
+            selected &&
+              "!border-[#356b55] !bg-[linear-gradient(145deg,#faf5ec,#f3eee4)] shadow-[0_13px_29px_rgba(0,10,7,0.34),0_0_0_1px_#356b55]",
+          )}
+        >
+          <span className="relative z-10 flex items-start justify-between gap-2">
+            <span className={cn("inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-[0.18em]", redSuit ? "text-[#8f1d2c]" : "text-[#54514b]")}>{suit} Flow</span>
+            {pairsWell && !selected ? (
+              <span className="rounded border border-[#a8c0d3] bg-[#e8f0f7] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.08em] text-[#305272]">
+                Pairs well
               </span>
-            </div>
-          </>
-        )}
-      </div>
+            ) : tensionHint && !selected ? (
+              <span
+                title={tensionHint}
+                className="rounded border border-[#d6b0b4] bg-[#f4e7e7] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.08em] text-[#7c2632]"
+              >
+                Tension
+              </span>
+            ) : selected ? (
+              <span className="rounded border border-[#a3c4ac] bg-[#e5f0e8] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.08em] text-[#356048]">
+                Selected
+              </span>
+            ) : (
+              <Icon className={cn("size-3.5", redSuit ? "text-[#8f1d2c]" : "text-[#343332]")} />
+            )}
+          </span>
+          <span className="relative z-10 mt-3">
+            <span className="flow-display block text-[15px] font-semibold leading-tight text-[#171717]">
+              {keyword.label}
+            </span>
+            <span className="mt-1 block line-clamp-2 text-[11px] leading-snug text-[#625e57]">
+              {visibleDescription}
+            </span>
+          </span>
+          <span className={cn("relative z-10 mt-auto inline-flex items-center gap-1 text-[10px]", selected ? "text-[#245a46]" : "text-[#655f57]")}>
+            {selected ? <Check className="size-3" /> : null}
+            {selected ? "In movement tray" : disabled ? "Max 2 selected" : "Choose"}
+          </span>
+        </span>
+        <span
+          aria-hidden={!conflict}
+          className="music-card-face music-card-back flex flex-col items-center justify-center gap-1.5 p-3 text-center"
+        >
+          <Lock className="relative z-10 size-4 text-[#ece7da]" />
+          <span className="relative z-10 text-[9px] font-bold uppercase tracking-[0.18em] text-[#c1cabf]">
+            Flow · Locked
+          </span>
+          <span className="flow-display relative z-10 text-sm font-semibold text-[#f4efe6]">{keyword.label}</span>
+          <span className="relative z-10 text-xs font-medium text-[#d9ddd3]">
+            Conflicts with {conflictLabel ?? "selected movement"}
+          </span>
+        </span>
+      </span>
     </button>
   );
 }

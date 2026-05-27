@@ -17,7 +17,7 @@ export function WorkflowActionBar({
   return (
     <div
       className={cn(
-        "sticky bottom-3 z-30 mt-auto rounded-2xl border border-white/10 bg-black/70 px-3 py-3 shadow-2xl shadow-black/40 backdrop-blur-xl",
+        "table-panel sticky bottom-3 z-30 mt-auto rounded-xl px-3 py-2.5",
         className,
       )}
     >

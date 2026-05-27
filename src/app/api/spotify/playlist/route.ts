@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { extractSpotifyPlaylistId } from "@/lib/spotify-playlist-id";
+import {
+  IMPORT_REQUEST_BODY_LIMIT_BYTES,
+  readBoundedJson,
+  RequestBodyTooLargeError,
+} from "@/lib/read-bounded-json";
 import type {
   SpotifyImportedTrackRow,
   SpotifyPlaylistImportResponse,
@@ -101,12 +106,14 @@ function errorJson(
   code: NonNullable<Extract<SpotifyPlaylistImportResponse, { ok: false }>["error"]>["code"],
   message: string,
   retryAfterSeconds?: number,
+  statusOverride?: number,
 ): NextResponse<SpotifyPlaylistImportResponse> {
   return NextResponse.json(
     { ok: false, error: { code, message, retryAfterSeconds } },
     {
       status:
-        code === "INVALID_URL"
+        statusOverride ??
+        (code === "INVALID_URL"
           ? 400
           : code === "MISSING_ENV"
             ? 503
@@ -114,7 +121,7 @@ function errorJson(
               ? 429
               : code === "EMPTY_PLAYLIST"
                 ? 422
-                : 502,
+                : 502),
     },
   );
 }
@@ -122,8 +129,16 @@ function errorJson(
 export async function POST(req: Request): Promise<NextResponse<SpotifyPlaylistImportResponse>> {
   let body: unknown;
   try {
-    body = await req.json();
-  } catch {
+    body = await readBoundedJson(req);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return errorJson(
+        "INVALID_URL",
+        `Request body is too large. Maximum size is ${IMPORT_REQUEST_BODY_LIMIT_BYTES} bytes.`,
+        undefined,
+        413,
+      );
+    }
     return errorJson("INVALID_URL", "Request body must be JSON.");
   }
 

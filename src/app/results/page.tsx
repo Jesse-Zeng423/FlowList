@@ -1,86 +1,58 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import Image from "next/image";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
-  BarChart3,
   Check,
+  ChevronDown,
   Copy,
   Download,
   ExternalLink,
   FileText,
-  Layers3,
   ListMusic,
-  Music2,
-  Sparkles,
   Waves,
 } from "lucide-react";
 import { AppFrame } from "@/components/app-frame";
 import { useFlow } from "@/components/flow-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
+import { canRegenerateFromCurrentState } from "@/lib/result-freshness";
+import { playResultReady } from "@/lib/sound-effects";
+import { cn } from "@/lib/utils";
 import type {
   AudioFeatures,
-  JourneyRole,
-  Phase,
   SequencedChapter,
   SequencedPlaylistSnapshot,
   SequencedTrack,
   TrackAnalysis,
   TransitionInsight,
 } from "@/types/flowlist";
-import { canRegenerateFromCurrentState } from "@/lib/result-freshness";
-import { cn } from "@/lib/utils";
 
-const PHASE_ORDER: Phase[] = ["Intro", "Build", "Peak", "Cooldown", "Outro"];
-
-function phaseFightsMoodRibbon(role: JourneyRole | null | undefined, phase: Phase): boolean {
-  if (!role) return false;
-  if (
-    role === "resolve" &&
-    (phase === "Peak" || phase === "Intro" || phase === "Build")
-  )
-    return true;
-  return false;
-}
-
-/** Honest one-liner for audio-feature provenance. Never claim audio analysis. */
-function audioFeatureSourceLabel(f: AudioFeatures): string {
-  switch (f.source) {
+function audioFeatureSourceLabel(features: AudioFeatures): string {
+  switch (features.source) {
     case "third_party":
-      return "Audio features: third-party lookup";
+      return "Third-party lookup";
     case "ai_estimated":
-      return "Audio features: AI estimate";
+      return "AI estimate";
     case "unavailable":
-      return "Audio features: unavailable";
+      return "Unavailable";
     case "prototype":
     default:
-      return "Audio features: prototype estimate";
+      return "Prototype estimate";
   }
 }
 
-/** Format BPM honestly: exact only for reliable sources, range otherwise. */
-function bpmDisplay(f: AudioFeatures): string | null {
-  const reliable = f.source === "third_party" || f.source === "ai_estimated";
-  if (reliable && typeof f.bpm === "number" && Number.isFinite(f.bpm)) {
-    return `BPM ${Math.round(f.bpm)}`;
+function bpmDisplay(features: AudioFeatures): string | null {
+  const reliable = features.source === "third_party" || features.source === "ai_estimated";
+  if (reliable && typeof features.bpm === "number" && Number.isFinite(features.bpm)) {
+    return `BPM ${Math.round(features.bpm)}`;
   }
-  if (f.bpmRange) return `BPM range ${f.bpmRange}`;
-  return null;
-}
-
-function formatDuration(ms: number) {
-  const s = Math.max(0, Math.round(ms / 1000));
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${m}:${r.toString().padStart(2, "0")}`;
+  return features.bpmRange ? `BPM range ${features.bpmRange}` : null;
 }
 
 function formatGeneratedAt(value: string | undefined) {
-  if (!value) return null;
+  if (!value) return "Just now";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat(undefined, {
@@ -91,137 +63,6 @@ function formatGeneratedAt(value: string | undefined) {
   }).format(date);
 }
 
-function phaseBadgeClass(phase: SequencedTrack["phase"]) {
-  switch (phase) {
-    case "Intro":
-      return "border-sky-400/40 bg-sky-500/15 text-sky-100";
-    case "Build":
-      return "border-violet-400/40 bg-violet-500/15 text-violet-100";
-    case "Peak":
-      return "border-amber-400/40 bg-amber-500/15 text-amber-100";
-    case "Cooldown":
-      return "border-emerald-400/35 bg-emerald-500/12 text-emerald-100";
-    case "Outro":
-      return "border-white/25 bg-white/10 text-zinc-100";
-    default:
-      return "";
-  }
-}
-
-function ArtistLine({ track }: { track: TrackAnalysis }) {
-  const conf = track.artistConfidence ?? "parsed";
-  if (conf === "channel_fallback") {
-    return (
-      <p className="truncate text-xs text-muted-foreground">
-        <span className="font-medium text-muted-foreground/90">Source channel · </span>
-        {track.artist}
-      </p>
-    );
-  }
-  if (conf === "unknown") {
-    return <p className="text-xs text-muted-foreground">Artist unknown</p>;
-  }
-  return <p className="truncate text-xs text-muted-foreground">{track.artist}</p>;
-}
-
-function avg(values: number[]) {
-  return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
-}
-
-interface DisplayGroup {
-  id: string;
-  label: string;
-  subtitle: string;
-  tags: string[];
-  tracks: SequencedTrack[];
-  startIndex: number;
-  avgEnergy: number;
-  avgRhythm: number;
-  accent: string;
-  moodJourneyRibbon: string | null;
-  moodJourneyRole: JourneyRole | null;
-}
-
-function chapterGroups(tracks: SequencedTrack[], chapters: SequencedChapter[]): DisplayGroup[] {
-  return chapters.map((chapter, index) => {
-    const slice = tracks.slice(chapter.fromIndex, chapter.toIndex + 1);
-    const moodTitle =
-      chapter.signature.dominantMood ||
-      chapter.label.replace(/^Chapter \d+\s*[·.]?\s*/i, "").trim();
-    const ribbon = chapter.roleName ?? null;
-    return {
-      id: `chapter-${chapter.index}`,
-      label: moodTitle || chapter.label,
-      subtitle:
-        chapter.description ??
-        `${
-          moodTitle ? `${moodTitle} arc` : "This arc"
-        } — clustered from prototype similarity, then sequenced locally for smooth continuity.`,
-      tags: chapter.dominantMoodTags ?? [chapter.signature.dominantMood],
-      tracks: slice,
-      startIndex: chapter.fromIndex,
-      avgEnergy: chapter.signature.avgEnergy,
-      avgRhythm: chapter.signature.avgRhythm,
-      accent: ["violet", "sky", "amber", "emerald", "fuchsia", "rose"][index % 6] ?? "violet",
-      moodJourneyRibbon: ribbon,
-      moodJourneyRole: chapter.journeyRole ?? null,
-    };
-  });
-}
-
-function phaseGroups(tracks: SequencedTrack[]): DisplayGroup[] {
-  const groups: Array<DisplayGroup | null> = PHASE_ORDER.map((phase, index) => {
-    const firstIndex = tracks.findIndex((track) => track.phase === phase);
-    const slice = tracks.filter((track) => track.phase === phase);
-    if (slice.length === 0) return null;
-    return {
-      id: `phase-${phase}`,
-      label: phase,
-      subtitle:
-        phase === "Intro"
-          ? "Opening cards that establish the world."
-          : phase === "Build"
-            ? "The sequence gathers motion and emotional direction."
-            : phase === "Peak"
-              ? "The highest-energy or most intense run."
-              : phase === "Cooldown"
-                ? "The journey starts settling into softer motion."
-                : "The landing point for the sequence.",
-      tags: [phase],
-      tracks: slice,
-      startIndex: firstIndex,
-      avgEnergy: avg(slice.map((track) => track.estimatedEnergy)),
-      avgRhythm: avg(slice.map((track) => track.rhythmIntensityScore)),
-      accent: ["sky", "violet", "amber", "emerald", "zinc"][index] ?? "violet",
-      moodJourneyRibbon: null,
-      moodJourneyRole: null,
-    };
-  });
-  return groups.filter((group): group is DisplayGroup => group !== null);
-}
-
-function buildGroups(tracks: SequencedTrack[], chapters?: SequencedChapter[]): DisplayGroup[] {
-  if (chapters && chapters.length > 0) return chapterGroups(tracks, chapters);
-  const grouped = phaseGroups(tracks);
-  return grouped.length > 0
-    ? grouped
-    : [
-        {
-          id: "ordered",
-          label: "Ordered spread",
-          subtitle: "The generated sequence in listening order.",
-          tags: ["ordered"],
-          tracks,
-          startIndex: 0,
-          avgEnergy: avg(tracks.map((track) => track.estimatedEnergy)),
-          avgRhythm: avg(tracks.map((track) => track.rhythmIntensityScore)),
-          accent: "violet",
-          moodJourneyRibbon: null,
-          moodJourneyRole: null,
-        },
-      ];
-}
-
 function sourceDisplay(snapshot: SequencedPlaylistSnapshot | null) {
   if (!snapshot) return "Source snapshot";
   if (snapshot.source === "youtube") return "YouTube Music metadata";
@@ -230,367 +71,190 @@ function sourceDisplay(snapshot: SequencedPlaylistSnapshot | null) {
   return snapshot.sourceLabel;
 }
 
-function energyBehavior(groups: DisplayGroup[]) {
-  if (groups.length < 2) return "Energy behavior is shown in the grouped spread below.";
-  const first = groups[0]!.avgEnergy;
-  const last = groups[groups.length - 1]!.avgEnergy;
-  const peak = Math.max(...groups.map((group) => group.avgEnergy));
-  if (last > first + 1.2) return "Energy rises toward the later spread.";
-  if (first > last + 1.2) return "Energy settles toward the landing.";
-  if (peak > first + 1 && peak > last + 1) return "Energy forms a central peak before resolving.";
-  return "Energy stays relatively even across the spread.";
+function ArtistLine({ track }: { track: TrackAnalysis }) {
+  if (track.artistConfidence === "channel_fallback") {
+    return (
+      <span className="truncate text-xs text-white/50">
+        <span className="font-medium text-white/62">Source channel</span> · {track.artist}
+      </span>
+    );
+  }
+  return (
+    <span className="truncate text-xs text-white/50">
+      {track.artistConfidence === "unknown" ? "Artist unknown" : track.artist}
+    </span>
+  );
 }
 
-function buildExportText(args: {
+interface OrderGroup {
+  id: string;
+  label: string | null;
+  role: string | null;
+  tracks: SequencedTrack[];
+  startIndex: number;
+}
+
+function buildOrderGroups(tracks: SequencedTrack[], chapters?: SequencedChapter[]): OrderGroup[] {
+  if (!chapters?.length) {
+    return [
+      {
+        id: "order",
+        label: null,
+        role: null,
+        tracks,
+        startIndex: 0,
+      },
+    ];
+  }
+  return chapters.map((chapter) => {
+    const chapterTracks = tracks.slice(chapter.fromIndex, chapter.toIndex + 1);
+    return {
+      id: `chapter-${chapter.index}`,
+      label: chapter.label,
+      role: chapter.roleName ?? null,
+      tracks: chapterTracks,
+      startIndex: chapter.fromIndex,
+    };
+  });
+}
+
+function buildExportText({
+  tracks,
+  transitions,
+  snapshot,
+}: {
   tracks: SequencedTrack[];
   transitions: TransitionInsight[];
-  moodArc: string;
-  rhythmArc: string;
-  playlistFitLabel: string | null;
-  groups: DisplayGroup[];
   snapshot: SequencedPlaylistSnapshot | null;
 }) {
-  const { tracks, transitions, moodArc, rhythmArc, playlistFitLabel, groups, snapshot } = args;
-  const lines: string[] = [];
-  lines.push("Flowlist — sequenced order (mock analysis / prototype sequencing)");
+  const lines = ["Flowlist - sequenced order (prototype sequencing)"];
   if (snapshot) {
     lines.push(`Playlist: ${snapshot.playlistName ?? "Untitled playlist"}`);
     lines.push(`Source: ${sourceDisplay(snapshot)}`);
-    if (snapshot.sourceOwnerLabel) lines.push(`Source owner/channel: ${snapshot.sourceOwnerLabel}`);
     if (snapshot.playlistTypeLabel) lines.push(`Playlist type: ${snapshot.playlistTypeLabel}`);
-    if (playlistFitLabel) lines.push(`Playlist fit: ${playlistFitLabel}`);
-    lines.push(
-      `Flow: ${
-        snapshot.selectedFlowKeywords.length
-          ? snapshot.selectedFlowKeywords.map((keyword) => keyword.label).join(" · ")
-          : "(none)"
-      }`,
-    );
+    lines.push(`Flow: ${snapshot.selectedFlowKeywords.map((keyword) => keyword.label).join(" / ") || "(none)"}`);
     lines.push(`Generated at: ${snapshot.generatedAt}`);
   }
-  lines.push("Prototype sequencing based on metadata and estimated mood/rhythm.");
+  lines.push("Estimated mood/rhythm. BPM ranges approximate.");
   lines.push("No audio is streamed or downloaded.");
   lines.push("");
-  lines.push("Mood arc:", moodArc);
-  lines.push("Rhythm arc:", rhythmArc);
-  lines.push("");
-
-  const groupByStart = new Map(groups.map((group) => [group.startIndex, group]));
   tracks.forEach((track, index) => {
-    const group = groupByStart.get(index);
-    if (group) lines.push(`-- ${group.label} (${group.tracks.length} tracks) --`);
-    const credit =
+    const artist =
       track.artistConfidence === "channel_fallback"
         ? `Source channel: ${track.artist}`
         : track.artistConfidence === "unknown"
           ? "Artist unknown"
           : track.artist;
-    lines.push(`${index + 1}. ${track.title} — ${credit}`);
-    lines.push(
-      `   Phase: ${track.phase} · Energy: ${track.estimatedEnergy}/10 · Rhythm: ${track.rhythmIntensityScore}/100 · Tempo: ${track.tempoFeel}`,
-    );
+    lines.push(`${index + 1}. ${track.title} - ${artist}`);
     const bpm = bpmDisplay(track.audioFeatures);
-    if (bpm) lines.push(`   ${bpm}`);
-    lines.push(`   ${audioFeatureSourceLabel(track.audioFeatures)}`);
+    lines.push(
+      `   ${track.phase} / Energy ${track.estimatedEnergy} / Rhythm ${track.rhythmIntensityScore} / ${track.tempoFeel} tempo${bpm ? ` / ${bpm}` : ""}`,
+    );
     lines.push(`   Why here: ${track.positionReason}`);
-    const transition = transitions[index - 1];
-    if (transition) lines.push(`   Transition in: ${transition.explanation}`);
+    const transition = transitions.find((item) => item.toIndex === index);
+    if (transition) lines.push(`   Transition: ${transition.explanation}`);
     lines.push("");
   });
   return lines.join("\n");
 }
 
-function MetricBars({ groups }: { groups: DisplayGroup[] }) {
-  const maxSize = Math.max(...groups.map((group) => group.tracks.length), 1);
-  return (
-    <section className="rounded-[1.75rem] border border-white/10 bg-black/30 p-4 shadow-2xl shadow-black/25 backdrop-blur-xl">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-violet-100/60">
-            spread metrics
-          </p>
-          <h2 className="mt-1 flex items-center gap-2 text-base font-semibold">
-            <BarChart3 className="size-4 text-violet-200" />
-            Energy / rhythm movement
-          </h2>
-        </div>
-        <div className="flex gap-2 text-[10px] text-muted-foreground">
-          <span className="inline-flex items-center gap-1">
-            <span className="size-2 rounded-full bg-amber-300/80" />
-            Energy
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <span className="size-2 rounded-full bg-violet-300/80" />
-            Rhythm
-          </span>
-        </div>
-      </div>
-      <div className="space-y-3">
-        {[
-          { key: "energy", label: "Energy", color: "from-amber-300/80 to-amber-500/30" },
-          { key: "rhythm", label: "Rhythm", color: "from-violet-300/80 to-fuchsia-500/30" },
-        ].map((metric) => (
-          <div key={metric.key} className="grid grid-cols-[4rem_1fr] items-center gap-3">
-            <p className="text-xs text-muted-foreground">{metric.label}</p>
-            <div className="flex h-10 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
-              {groups.map((group, index) => {
-                const value = metric.key === "energy" ? group.avgEnergy * 10 : group.avgRhythm;
-                const width = Math.max(0.8, group.tracks.length / maxSize);
-                return (
-                  <div
-                    key={`${metric.key}-${group.id}`}
-                    className="group relative min-w-10 border-r border-black/30 last:border-r-0"
-                    style={{ flexGrow: width }}
-                  >
-                    <div
-                      className={cn(
-                        "absolute bottom-0 left-0 right-0 origin-bottom rounded-t-xl bg-gradient-to-t opacity-85 shadow-[0_0_18px_rgba(168,85,247,0.14)]",
-                        metric.color,
-                      )}
-                      style={{
-                        height: `${Math.max(8, value)}%`,
-                        animation: "result-bar-grow 650ms ease-out both",
-                        animationDelay: `${index * 70}ms`,
-                      }}
-                    />
-                    <span className="absolute inset-x-0 top-1 text-center text-[9px] text-muted-foreground">
-                      {groups.length === 1 ? "All" : `Ch ${index + 1}`}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function ChapterOverview({ groups, hasChapters }: { groups: DisplayGroup[]; hasChapters: boolean }) {
-  if (groups.length === 0) return null;
-  return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="flex items-center gap-2 text-base font-semibold tracking-tight">
-          <Layers3 className="size-4 text-violet-200" />
-          {hasChapters ? "Chapter overview" : "Phase overview"}
-        </h2>
-        <p className="text-xs text-muted-foreground">
-          {hasChapters ? "Grouped by mood/rhythm similarity" : "Grouped by sequence phase"}
-        </p>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {groups.map((group, index) => (
-          <article
-            key={group.id}
-            className="flow-page-in rounded-[1.5rem] border border-white/10 bg-white/[0.045] p-4 shadow-xl shadow-black/20 backdrop-blur-xl"
-            style={{ animationDelay: `${index * 70}ms` }}
-          >
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-violet-100/60">
-                  {hasChapters ? `Chapter ${index + 1}` : "Phase"}
-                </p>
-                {hasChapters && group.moodJourneyRibbon ? (
-                  <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-violet-200/90">
-                    {group.moodJourneyRibbon}
-                  </p>
-                ) : null}
-                <h3 className="mt-1 text-sm font-semibold text-foreground">{group.label}</h3>
-              </div>
-              <span className="rounded-full border border-white/10 bg-black/25 px-2 py-0.5 text-[10px] text-muted-foreground">
-                {group.tracks.length} tracks
-              </span>
-            </div>
-            <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-              {group.subtitle}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {group.tags.slice(0, 3).map((tag) => (
-                <Badge
-                  key={tag}
-                  variant="outline"
-                  className="border-white/10 bg-white/[0.03] text-[10px] font-normal text-muted-foreground"
-                >
-                  {tag}
-                </Badge>
-              ))}
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-              <span>Energy {(group.avgEnergy * 10).toFixed(0)}</span>
-              <span>Rhythm {group.avgRhythm.toFixed(0)}</span>
-            </div>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function TrackCard({
+function TrackRow({
   track,
-  absoluteIndex,
+  position,
   transition,
-  moodJourneyRibbon,
-  moodJourneyRole,
 }: {
   track: SequencedTrack;
-  absoluteIndex: number;
-  transition: TransitionInsight | undefined;
-  moodJourneyRibbon: string | null;
-  moodJourneyRole: JourneyRole | null;
+  position: number;
+  transition?: TransitionInsight;
 }) {
   const bpm = bpmDisplay(track.audioFeatures);
-  const hidePhaseBadge =
-    Boolean(moodJourneyRibbon) && phaseFightsMoodRibbon(moodJourneyRole, track.phase);
-  const mutedPhaseBadge = Boolean(moodJourneyRibbon);
-
   return (
-    <article className="rounded-[1.25rem] border border-white/10 bg-black/35 p-3 shadow-lg shadow-black/20 backdrop-blur-sm">
-      <div className="flex gap-3">
-        {track.importMeta?.thumbnailUrl ? (
-          <Image
-            src={track.importMeta.thumbnailUrl}
-            alt={track.album}
-            width={44}
-            height={44}
-            unoptimized
-            className="size-11 shrink-0 rounded-xl object-cover ring-1 ring-white/10"
-          />
-        ) : (
-          <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-white/5 ring-1 ring-white/10">
-            <Music2 className="size-4 text-white/35" />
-          </div>
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <p className="text-[10px] font-medium tabular-nums text-muted-foreground">
-                  {String(absoluteIndex + 1).padStart(2, "0")}
-                </p>
-                {moodJourneyRibbon ? (
-                  <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-violet-200/90">
-                    {moodJourneyRibbon}
-                  </span>
-                ) : null}
-              </div>
-              <p className="truncate text-sm font-semibold tracking-tight text-foreground">
-                {track.importMeta?.externalUrl ? (
-                  <a
-                    href={track.importMeta.externalUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="hover:text-violet-200 hover:underline"
-                  >
-                    {track.title}
-                  </a>
-                ) : (
-                  track.title
-                )}
-              </p>
-              <ArtistLine track={track} />
-            </div>
-            {!hidePhaseBadge ? (
-              <div className="flex shrink-0 flex-col items-end gap-1">
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    "border text-[10px] font-medium",
-                    phaseBadgeClass(track.phase),
-                    mutedPhaseBadge ? "opacity-70" : "",
-                  )}
-                >
-                  {track.phase}
-                </Badge>
-                {track.semanticPhaseRibbon ? (
-                  <span
-                    className="max-w-[11rem] text-right text-[9px] leading-tight text-muted-foreground/80"
-                    title={track.semanticPhaseRibbon}
-                  >
-                    {track.semanticPhaseRibbon}
-                  </span>
-                ) : null}
-              </div>
-            ) : track.semanticPhaseRibbon ? (
-              <span
-                className="max-w-[11rem] text-right text-[9px] leading-tight text-muted-foreground/80"
-                title={track.semanticPhaseRibbon}
+    <article className="border-b border-white/7 py-2.5 last:border-b-0">
+      <div className="grid grid-cols-[2rem_minmax(0,1fr)] gap-3 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-start">
+        <span className="pt-0.5 text-right font-mono text-xs text-white/32">
+          {String(position + 1).padStart(2, "0")}
+        </span>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-[#faf1e2]">
+            {track.importMeta?.externalUrl ? (
+              <a
+                href={track.importMeta.externalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-[#cadcd3] hover:underline"
               >
-                {track.semanticPhaseRibbon}
-              </span>
-            ) : null}
-          </div>
-
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            <Badge variant="secondary" className="bg-white/5 text-[10px] font-normal text-foreground/90">
-              Energy {track.estimatedEnergy}/10
+                {track.title}
+              </a>
+            ) : (
+              track.title
+            )}
+          </p>
+          <ArtistLine track={track} />
+          <p className="mt-1 text-[11px] text-white/43">
+            Energy {track.estimatedEnergy} · Rhythm {track.rhythmIntensityScore} · {track.tempoFeel} tempo
+            {bpm ? ` · ${bpm}` : ""}
+          </p>
+        </div>
+        <div className="col-start-2 flex flex-wrap gap-1.5 sm:col-auto sm:justify-end">
+          <Badge variant="outline" className="border-white/12 bg-white/[0.04] text-[10px] font-normal text-white/60">
+            {track.phase}
+          </Badge>
+          {track.semanticPhaseRibbon ? (
+            <Badge variant="outline" className="border-[#779e8e]/28 bg-[#245343]/20 text-[10px] font-normal text-[#d5e2da]">
+              {track.semanticPhaseRibbon}
             </Badge>
-            <Badge variant="secondary" className="bg-white/5 text-[10px] font-normal text-foreground/90">
-              Tempo {track.tempoFeel}
-            </Badge>
-            <Badge variant="secondary" className="bg-white/5 text-[10px] font-normal text-foreground/90">
-              Rhythm {track.rhythmIntensityScore}
-            </Badge>
-            {bpm ? (
-              <Badge variant="secondary" className="bg-white/5 text-[10px] font-normal text-foreground/90">
-                {bpm}
-              </Badge>
-            ) : null}
-            {track.importMeta?.durationMs != null && track.importMeta.durationMs > 0 ? (
-              <Badge variant="outline" className="border-white/10 text-[10px] font-normal text-muted-foreground">
-                {formatDuration(track.importMeta.durationMs)}
-              </Badge>
-            ) : null}
-            <Badge
-              variant="outline"
-              className="border-white/10 text-[10px] font-normal text-muted-foreground"
-              title={`Confidence ${(track.audioFeatures.confidence * 100).toFixed(0)}%`}
-            >
-              {audioFeatureSourceLabel(track.audioFeatures)}
-            </Badge>
-          </div>
+          ) : null}
+        </div>
+      </div>
+      <details className="group ml-11 mt-1.5 text-xs text-white/48">
+        <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-white/42 hover:text-white/68">
+          <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
+          Why here{transition ? " / Transition" : ""}
+        </summary>
+        <div className="mt-2 space-y-1.5 rounded-lg bg-black/18 px-3 py-2 leading-relaxed">
+          <p>
+            <span className="font-medium text-white/66">Why here: </span>
+            {track.positionReason}
+          </p>
           {transition ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-              <span className="font-medium text-foreground/70">Transition in: </span>
+            <p>
+              <span className="font-medium text-white/66">Transition: </span>
               {transition.explanation}
             </p>
           ) : null}
-          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            <span className="font-medium text-foreground/70">Why here: </span>
-            {track.positionReason}
-          </p>
+          <p className="text-white/38">{audioFeatureSourceLabel(track.audioFeatures)}</p>
         </div>
-      </div>
+      </details>
     </article>
   );
 }
 
-function emptyStatePrimaryAction(
-  stale: boolean,
-  regen: ReturnType<typeof canRegenerateFromCurrentState>,
-): { href: string; label: string } {
-  if (regen.canRegenerate) {
-    return {
-      href: "/analyze",
-      label: stale ? "Generate new sequence" : "Deal the sequence",
-    };
-  }
-  const m = regen.missing[0];
-  if (m === "tracks") return { href: "/import", label: "Back to import" };
-  if (m === "playlistType") return { href: "/playlist-type", label: "Choose playlist type" };
-  return { href: "/flow", label: "Choose flow keywords" };
-}
-
-function emptyStateSecondaryAction(primary: {
-  href: string;
-  label: string;
-}): { href: string; label: string } {
-  if (primary.href === "/import" && primary.label === "Back to import") {
-    return { href: "/import?demo=1", label: "Try demo playlist" };
-  }
-  return { href: "/import", label: "Back to import" };
+function ArcMiniBars({ tracks }: { tracks: SequencedTrack[] }) {
+  const sample =
+    tracks.length <= 26
+      ? tracks
+      : Array.from({ length: 26 }, (_, index) => tracks[Math.floor((index * tracks.length) / 26)]!);
+  return (
+    <div className="space-y-3">
+      {[
+        { label: "Energy", value: (track: SequencedTrack) => track.estimatedEnergy * 10, color: "bg-[#9b3944]" },
+        { label: "Rhythm", value: (track: SequencedTrack) => track.rhythmIntensityScore, color: "bg-[#629886]" },
+      ].map((metric) => (
+        <div key={metric.label}>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/34">{metric.label}</p>
+          <div className="flex h-9 items-end gap-[2px]">
+            {sample.map((track, index) => (
+              <span
+                key={`${metric.label}-${track.id}-${index}`}
+                className={cn("min-w-0 flex-1 rounded-t-sm opacity-85", metric.color)}
+                style={{ height: `${Math.max(7, metric.value(track))}%` }}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function EmptyState({
@@ -604,111 +268,65 @@ function EmptyState({
   playlistTypeId: string | null;
   selectedFlowKeywordIds: string[];
 }) {
-  const regen = canRegenerateFromCurrentState({
+  const regeneration = canRegenerateFromCurrentState({
     resolvedTrackCount,
     playlistTypeId,
     selectedFlowKeywordIds,
   });
-  const primary = emptyStatePrimaryAction(stale, regen);
-  const secondary = emptyStateSecondaryAction(primary);
-
-  const helper = stale
-    ? regen.canRegenerate
-      ? "We will run the same prototype sequencer used on the Flow step and take you through the shuffle screen first."
-      : regen.missing.includes("tracks")
-        ? "Add or import tracks before generating a new sequence."
-        : regen.missing.includes("playlistType")
-          ? "Pick a playlist type so flow keywords and sequencing match your musical context."
-          : "Choose at least one flow keyword so the sequencer knows how to shape the journey."
-    : "Start sequencing to import a playlist, choose a flow, and deal a curated spread.";
+  const target = stale
+    ? regeneration.canRegenerate
+      ? { href: "/analyze", label: "Generate new sequence" }
+      : regeneration.missing[0] === "tracks"
+        ? { href: "/import", label: "Start sequencing" }
+        : regeneration.missing[0] === "playlistType"
+          ? { href: "/playlist-type", label: "Choose playlist type" }
+          : { href: "/flow", label: "Choose flow keywords" }
+    : { href: "/import", label: "Start sequencing" };
 
   return (
-    <AppFrame contentClassName="max-w-4xl">
-      <div className="flow-page-in flex flex-1 flex-col items-start justify-center gap-4 pb-8">
-        <div className="rounded-[1.75rem] border border-white/10 bg-black/35 p-5 shadow-2xl shadow-black/25 backdrop-blur-xl">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {stale ? "Your playlist or flow settings changed." : "No sequence generated yet."}
+    <AppFrame contentClassName="max-w-xl">
+      <div className="flow-page-in flex flex-1 items-center pb-14">
+        <section className="table-panel w-full rounded-xl p-6">
+          <h1 className="flow-display text-3xl font-semibold text-[#faf1e2]">
+            {stale ? "Your settings changed." : "No sequence generated yet."}
           </h1>
-          <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">{helper}</p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Link
-              href={primary.href}
-              className={cn(buttonVariants({ variant: "default" }), "rounded-full no-underline")}
-            >
-              {primary.label}
-            </Link>
-            <Link
-              href={secondary.href}
-              className={cn(
-                buttonVariants({ variant: "secondary" }),
-                "rounded-full bg-white/10 no-underline",
-              )}
-            >
-              {secondary.label}
-            </Link>
-          </div>
-        </div>
+          <p className="mt-2 text-sm text-white/52">
+            {stale ? "Generate a fresh result from the current playlist and flow selections." : "Bring in a playlist to deal a new order."}
+          </p>
+          <Link href={target.href} className={cn(buttonVariants({ size: "lg" }), "mt-5 inline-flex rounded-lg no-underline")}>
+            {target.label}
+          </Link>
+        </section>
       </div>
     </AppFrame>
   );
 }
 
 export default function ResultsPage() {
-  const {
-    result,
-    resultIsStale,
-    resolvedTracks,
-    playlistTypeId,
-    selectedFlowKeywordIds,
-    reset,
-  } = useFlow();
+  const { result, resultIsStale, resolvedTracks, playlistTypeId, selectedFlowKeywordIds, reset } = useFlow();
   const [copied, setCopied] = useState(false);
 
-  const groups = useMemo(
-    () => (result ? buildGroups(result.tracks, result.chapters) : []),
+  // Play once when arriving from a fresh generation. The flag is written by analyze/page.tsx
+  // immediately before router.replace("/results") and consumed here to avoid replaying on
+  // page refresh or direct navigation.
+  useEffect(() => {
+    try {
+      if (window.sessionStorage.getItem("flowlist:fresh-result") === "1") {
+        window.sessionStorage.removeItem("flowlist:fresh-result");
+        playResultReady();
+      }
+    } catch {}
+  }, []);
+  const groups = useMemo(() => (result ? buildOrderGroups(result.tracks, result.chapters) : []), [result]);
+  const transitionByIndex = useMemo(() => {
+    const map = new Map<number, TransitionInsight>();
+    result?.transitions.forEach((transition) => map.set(transition.toIndex, transition));
+    return map;
+  }, [result]);
+  const exportText = useMemo(
+    () => (result ? buildExportText({ tracks: result.tracks, transitions: result.transitions, snapshot: result.snapshot ?? null }) : ""),
     [result],
   );
-
-  const exportText = useMemo(() => {
-    if (!result) return "";
-    return buildExportText({
-      tracks: result.tracks,
-      transitions: result.transitions,
-      moodArc: result.moodArcSummary,
-      rhythmArc: result.rhythmArcSummary,
-      playlistFitLabel: result.playlistFit?.label ?? null,
-      groups,
-      snapshot: result.snapshot ?? null,
-    });
-  }, [groups, result]);
-
-  const transitionByToIndex = useMemo(() => {
-    const map = new Map<number, TransitionInsight>();
-    for (const transition of result?.transitions ?? []) map.set(transition.toIndex, transition);
-    return map;
-  }, [result?.transitions]);
-
-  const handleCopy = async () => {
-    if (!exportText) return;
-    try {
-      await navigator.clipboard.writeText(exportText);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(false);
-    }
-  };
-
-  const handleDownload = () => {
-    if (!exportText) return;
-    const blob = new Blob([exportText], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "flowlist-sequence.txt";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
 
   if (!result) {
     return (
@@ -723,264 +341,180 @@ export default function ResultsPage() {
 
   if (result.tracks.length === 0) {
     return (
-      <AppFrame contentClassName="max-w-4xl">
-        <div className="flow-page-in flex flex-1 flex-col items-start justify-center gap-4 pb-8">
-          <div className="rounded-[1.75rem] border border-amber-500/30 bg-amber-500/10 p-5 text-amber-50/95">
-            <h1 className="text-2xl font-semibold tracking-tight">No usable tracks to sequence.</h1>
-            <p className="mt-2 text-sm text-amber-100/80">
-              Try another playlist or paste tracks manually.
-            </p>
-            <Link
-              href="/import"
-              className={cn(buttonVariants({ variant: "default" }), "mt-4 rounded-full no-underline")}
-            >
-              Back to import
-            </Link>
-          </div>
+      <AppFrame contentClassName="max-w-xl">
+        <div className="flow-page-in flex flex-1 items-center pb-14">
+          <section className="table-panel w-full rounded-xl p-6">
+            <h1 className="flow-display text-2xl font-semibold">No usable tracks to sequence.</h1>
+            <Link href="/import" className={cn(buttonVariants(), "mt-5 rounded-lg no-underline")}>Start sequencing</Link>
+          </section>
         </div>
       </AppFrame>
     );
   }
 
-  const {
-    tracks,
-    moodArcSummary,
-    rhythmArcSummary,
-    skippedUnavailableCount,
-    playlistFit,
-    snapshot,
-    chapters,
-  } = result;
-  const generatedAt = formatGeneratedAt(snapshot?.generatedAt);
-  const hasChapters = Boolean(chapters && chapters.length > 0);
-  const snapshotFlowLabels = snapshot?.selectedFlowKeywords.map((keyword) => keyword.label) ?? [];
+  const { tracks, playlistFit, snapshot, skippedUnavailableCount, moodArcSummary, rhythmArcSummary } = result;
+  const flowLabels = snapshot?.selectedFlowKeywords.map((keyword) => keyword.label) ?? [];
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(exportText);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  const handleDownload = () => {
+    const blob = new Blob([exportText], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "flowlist-sequence.txt";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
-    <AppFrame contentClassName="max-w-7xl">
-      <div className="flow-page-in flex flex-1 flex-col gap-7 pb-10">
-        <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-black/35 p-5 shadow-2xl shadow-black/35 backdrop-blur-xl">
-          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-violet-300/70 to-transparent" />
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(167,139,250,0.18),transparent_45%)]" />
-          <div className="relative grid gap-5 lg:grid-cols-[1.1fr_0.9fr] lg:items-start">
-            <div className="space-y-4">
-              <p className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-100/80">
-                <Sparkles className="size-3.5" />
-                Final dealt spread
-              </p>
-              <div>
-                <h1 className="text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
-                  {snapshot?.playlistName ?? "Your sequence"}
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-                  Prototype sequencing based on metadata and estimated mood/rhythm. No audio is
-                  streamed or downloaded.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant="outline" className="border-emerald-300/25 bg-emerald-500/10 text-emerald-100">
-                  {sourceDisplay(snapshot ?? null)}
+    <AppFrame contentClassName="max-w-6xl">
+      <div className="flow-page-in flex flex-1 flex-col gap-5 pb-8">
+        <header className="result-header-in">
+          <h1 className="flow-display text-3xl font-semibold text-[#faf1e2] sm:text-4xl">Your reordered playlist is ready</h1>
+          <p className="mt-1 text-sm text-white/53">
+            A prototype listening order based on playlist metadata and estimated mood/rhythm.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {[
+              sourceDisplay(snapshot ?? null),
+              snapshot?.playlistTypeLabel,
+              ...flowLabels,
+              "Prototype sequencing",
+              "Estimated mood/rhythm",
+              "BPM ranges approximate",
+              "No audio streamed or downloaded",
+            ]
+              .filter((label): label is string => Boolean(label))
+              .map((label) => (
+                <Badge key={label} variant="outline" className="border-white/12 bg-black/18 text-[10px] font-normal text-white/63">
+                  {label}
                 </Badge>
-                {snapshot?.playlistTypeLabel ? (
-                  <Badge variant="outline" className="border-violet-300/25 bg-violet-500/10 text-violet-100">
-                    {snapshot.playlistTypeLabel}
-                  </Badge>
-                ) : null}
-                {snapshotFlowLabels.map((label) => (
-                  <Badge key={label} variant="outline" className="border-white/15 bg-white/[0.04] text-muted-foreground">
-                    {label}
-                  </Badge>
-                ))}
-                {playlistFit ? (
-                  <Badge variant="outline" className="border-sky-300/20 bg-sky-500/10 text-sky-100">
-                    {playlistFit.label}
-                  </Badge>
-                ) : null}
-                <Badge variant="outline" className="border-amber-300/20 bg-amber-500/10 text-amber-100">
-                  Prototype sequencing
-                </Badge>
-                <Badge variant="outline" className="border-white/15 bg-white/[0.04] text-muted-foreground">
-                  Estimated mood/rhythm
-                </Badge>
-                <Badge variant="outline" className="border-white/15 bg-white/[0.04] text-muted-foreground">
-                  {snapshot?.audioFeatureSourceSummary ?? "BPM ranges approximate"}
-                </Badge>
-                {snapshot?.source === "demo" ? (
-                  <Badge variant="outline" className="border-violet-300/25 bg-violet-500/10 text-violet-100">
-                    Demo / mock data
-                  </Badge>
-                ) : null}
-              </div>
-            </div>
+              ))}
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button type="button" variant="outline" className="rounded-lg border-white/14 bg-black/16" onClick={handleCopy}>
+              {copied ? <Check className="size-4 text-emerald-300" /> : <Copy className="size-4" />}
+              {copied ? "Copied" : "Copy sequence"}
+            </Button>
+            <Button type="button" variant="outline" className="rounded-lg border-white/14 bg-black/16" onClick={handleDownload}>
+              <Download className="size-4" />
+              Export as text
+            </Button>
+          </div>
+        </header>
 
-            <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.035] p-4">
-              <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.24em] text-violet-100/60">
-                sequence receipt
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_15rem]">
+          <main className="table-panel result-order-in rounded-xl p-4 sm:p-5">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="flow-display flex items-center gap-2 text-xl font-semibold text-[#fbf1e1]">
+                <ListMusic className="size-4 text-[#cddbd2]" />
+                Sequenced order
+              </h2>
+              <span className="text-xs text-white/40">{tracks.length} tracks</span>
+            </div>
+            {skippedUnavailableCount != null && skippedUnavailableCount > 0 ? (
+              <p className="mb-3 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+                Some unavailable YouTube videos were skipped.
               </p>
-              <dl className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <dt className="text-xs text-muted-foreground">Tracks</dt>
-                  <dd className="font-medium text-foreground">{snapshot?.trackCount ?? tracks.length}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Generated</dt>
-                  <dd className="font-medium text-foreground">{generatedAt ?? "Just now"}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Snapshot</dt>
-                  <dd className="font-medium text-foreground">Source locked</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Mode</dt>
-                  <dd className="font-medium text-foreground">
-                    {snapshot?.analysisMode === "prototype" ? "Prototype" : "Prototype"}
-                  </dd>
-                </div>
+            ) : null}
+            {groups.map((group, groupIndex) => (
+              <section
+                key={group.id}
+                className={cn("result-group-in", groupIndex > 0 ? "mt-5" : "")}
+                style={{ animationDelay: `${Math.min(groupIndex, 4) * 38 + 170}ms` }}
+              >
+                {group.label ? (
+                  <div className="mb-2 flex flex-wrap items-baseline gap-2 border-b border-[#7c9c8e]/25 pb-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#b96c75]">
+                      Chapter {groupIndex + 1}
+                    </span>
+                    <h3 className="text-sm font-medium text-white/76">{group.label}</h3>
+                    {group.role ? <span className="text-xs text-white/40">{group.role}</span> : null}
+                  </div>
+                ) : null}
+                {group.tracks.map((track, localIndex) => {
+                  const position = group.startIndex + localIndex;
+                  return (
+                    <TrackRow
+                      key={`${track.id}-${position}`}
+                      track={track}
+                      position={position}
+                      transition={transitionByIndex.get(position)}
+                    />
+                  );
+                })}
+              </section>
+            ))}
+          </main>
+
+          <aside className="result-summary-in space-y-3 lg:sticky lg:top-4">
+            <section className="table-panel rounded-xl p-4">
+              <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/37">Snapshot</p>
+              <dl className="space-y-2 text-xs">
+                {[
+                  ["Tracks", String(snapshot?.trackCount ?? tracks.length)],
+                  ["Source", sourceDisplay(snapshot ?? null)],
+                  ["Playlist fit", playlistFit?.label ?? "Prototype fit"],
+                  ["Flow", flowLabels.join(" / ") || "Selected flow"],
+                  ["Generated", formatGeneratedAt(snapshot?.generatedAt)],
+                ].map(([term, value]) => (
+                  <div key={term} className="border-b border-white/6 pb-2 last:border-0 last:pb-0">
+                    <dt className="text-white/36">{term}</dt>
+                    <dd className="mt-0.5 leading-snug text-white/72">{value}</dd>
+                  </div>
+                ))}
               </dl>
               {snapshot?.playlistExternalUrl ? (
                 <a
                   href={snapshot.playlistExternalUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-violet-200 underline-offset-4 hover:underline"
+                  className="mt-3 inline-flex items-center gap-1 text-xs text-[#bdd5ca] hover:underline"
                 >
-                  Open source playlist
+                  Open source
                   <ExternalLink className="size-3" />
                 </a>
               ) : null}
-            </div>
-          </div>
-        </section>
+            </section>
+            <section className="table-panel rounded-xl p-4">
+              <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/37">Energy / Rhythm</p>
+              <ArcMiniBars tracks={tracks} />
+              <p className="mt-3 text-[10px] leading-relaxed text-white/37">
+                BPM ranges approximate. No audio is analyzed.
+              </p>
+            </section>
+            <details className="table-panel rounded-xl p-4 text-xs text-white/52">
+              <summary className="cursor-pointer font-medium text-white/68">Method notes</summary>
+              <p className="mt-3 flex gap-2">
+                <Waves className="mt-0.5 size-3.5 shrink-0 text-[#c5dad1]" />
+                {moodArcSummary}
+              </p>
+              <p className="mt-2 flex gap-2">
+                <Activity className="mt-0.5 size-3.5 shrink-0 text-[#72a391]" />
+                {rhythmArcSummary}
+              </p>
+            </details>
+          </aside>
+        </div>
 
-        {skippedUnavailableCount != null && skippedUnavailableCount > 0 ? (
-          <div className="rounded-2xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-sm text-amber-50/95">
-            Some unavailable YouTube videos were skipped.
-          </div>
-        ) : null}
-
-        <section className="grid gap-3 lg:grid-cols-3">
-          <div className="rounded-[1.5rem] border border-white/10 bg-black/30 p-4 shadow-xl shadow-black/20 backdrop-blur-xl">
-            <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-              <Waves className="size-4 text-violet-200" />
-              Mood arc
-            </h2>
-            <p className="text-sm leading-relaxed text-muted-foreground">{moodArcSummary}</p>
-          </div>
-          <div className="rounded-[1.5rem] border border-white/10 bg-black/30 p-4 shadow-xl shadow-black/20 backdrop-blur-xl">
-            <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-              <Activity className="size-4 text-amber-200" />
-              Rhythm arc
-            </h2>
-            <p className="text-sm leading-relaxed text-muted-foreground">{rhythmArcSummary}</p>
-          </div>
-          <div className="rounded-[1.5rem] border border-white/10 bg-black/30 p-4 shadow-xl shadow-black/20 backdrop-blur-xl">
-            <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-              <BarChart3 className="size-4 text-emerald-200" />
-              Energy behavior
-            </h2>
-            <p className="text-sm leading-relaxed text-muted-foreground">{energyBehavior(groups)}</p>
-          </div>
-        </section>
-
-        <MetricBars groups={groups} />
-        <ChapterOverview groups={groups} hasChapters={hasChapters} />
-
-        <section className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
-              <ListMusic className="size-4 text-violet-200" />
-              Dealt track spread
-            </h2>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-full border-white/15 bg-white/5"
-                onClick={handleCopy}
-              >
-                {copied ? <Check className="size-4 text-emerald-300" /> : <Copy className="size-4" />}
-                {copied ? "Copied" : "Copy sequence"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-full border-white/15 bg-white/5"
-                onClick={handleDownload}
-              >
-                <Download className="size-4" />
-                Export as text
-              </Button>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            {groups.map((group, groupIndex) => (
-              <details
-                key={group.id}
-                open={groupIndex < 2}
-                className="rounded-[1.75rem] border border-white/10 bg-black/25 p-4 shadow-xl shadow-black/20 backdrop-blur-xl"
-              >
-                <summary className="cursor-pointer list-none">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-violet-100/60">
-                        {hasChapters ? `Chapter ${groupIndex + 1}` : "Phase section"}
-                      </p>
-                      {hasChapters && group.moodJourneyRibbon ? (
-                        <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-violet-200/90">
-                          {group.moodJourneyRibbon}
-                        </p>
-                      ) : null}
-                      <h3 className="mt-1 text-base font-semibold text-foreground">{group.label}</h3>
-                      <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-                        {group.subtitle}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      <Badge variant="outline" className="border-white/10 bg-white/[0.04] text-[10px] text-muted-foreground">
-                        {group.tracks.length} tracks
-                      </Badge>
-                      <Badge variant="outline" className="border-white/10 bg-white/[0.04] text-[10px] text-muted-foreground">
-                        Energy {(group.avgEnergy * 10).toFixed(0)}
-                      </Badge>
-                      <Badge variant="outline" className="border-white/10 bg-white/[0.04] text-[10px] text-muted-foreground">
-                        Rhythm {group.avgRhythm.toFixed(0)}
-                      </Badge>
-                    </div>
-                  </div>
-                </summary>
-                <Separator className="my-3 bg-white/10" />
-                <div className="grid gap-2 xl:grid-cols-2">
-                  {group.tracks.map((track, localIndex) => {
-                    const absoluteIndex = group.startIndex + localIndex;
-                    return (
-                      <TrackCard
-                        key={`${track.id}-${absoluteIndex}`}
-                        track={track}
-                        absoluteIndex={absoluteIndex}
-                        transition={transitionByToIndex.get(absoluteIndex)}
-                        moodJourneyRibbon={group.moodJourneyRibbon}
-                        moodJourneyRole={group.moodJourneyRole}
-                      />
-                    );
-                  })}
-                </div>
-              </details>
-            ))}
-          </div>
-        </section>
-
-        <div className="flex flex-wrap justify-between gap-3 border-t border-white/10 pt-6">
-          <Button type="button" variant="ghost" className="text-muted-foreground" onClick={() => reset()}>
+        <footer className="flex flex-wrap justify-between gap-3 border-t border-white/8 pt-4">
+          <Button type="button" variant="ghost" className="text-white/50" onClick={() => reset()}>
             Reset session
           </Button>
-          <Link
-            href="/flow"
-            className="inline-flex items-center gap-1 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-          >
+          <Link href="/flow" className="inline-flex items-center gap-1 text-sm text-white/52 hover:text-white/78">
             <FileText className="size-3.5" />
             Adjust flow keywords
           </Link>
-        </div>
+        </footer>
       </div>
     </AppFrame>
   );

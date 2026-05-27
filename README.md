@@ -42,8 +42,22 @@ npm run dev
 Open [http://localhost:3000](http://localhost:3000).
 
 ```bash
+npm test
 npm run lint
 npm run build
+```
+
+### Verify the import origin guard
+
+Next.js 16 uses `src/proxy.ts` to reject cross-origin browser POSTs to the
+YouTube playlist import route before any provider request is made. With the dev
+server running, this manual check should return `HTTP/1.1 403`:
+
+```bash
+curl -i -X POST http://localhost:3000/api/youtube/playlist \
+  -H 'Origin: https://cross-origin.example' \
+  -H 'Content-Type: application/json' \
+  --data '{"url":"https://www.youtube.com/playlist?list=test"}'
 ```
 
 ## Safety / scope

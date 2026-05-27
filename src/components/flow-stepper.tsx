@@ -1,70 +1,54 @@
 "use client";
 
 import Link from "next/link";
-import { Check, Circle, Sparkles } from "lucide-react";
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const STEPS = [
   { label: "Import", href: "/import" },
   { label: "Type", href: "/playlist-type" },
   { label: "Flow", href: "/flow" },
-  { label: "Shuffle", href: "/analyze" },
 ] as const;
 
 export function FlowStepper({
   current,
   className,
 }: {
-  current: 0 | 1 | 2 | 3;
+  current: 0 | 1 | 2;
   className?: string;
 }) {
   return (
-    <nav
-      aria-label="Flowlist sequencing steps"
-      className={cn(
-        "rounded-2xl border border-white/10 bg-black/25 p-2 shadow-2xl shadow-black/20 backdrop-blur-xl",
-        className,
-      )}
-    >
-      <ol className="grid grid-cols-4 gap-1">
+    <nav aria-label="Flowlist sequencing steps" className={cn("flex justify-center", className)}>
+      <ol className="table-panel flex items-center rounded-full px-3 py-2">
         {STEPS.map((step, index) => {
           const done = index < current;
           const active = index === current;
           return (
-            <li key={step.label}>
+            <li key={step.label} className="flex items-center">
               <Link
                 href={step.href}
                 aria-current={active ? "step" : undefined}
-                className={cn(
-                  "group flex min-h-14 flex-col justify-between rounded-xl border px-2.5 py-2 text-left transition-all duration-300",
-                  active
-                    ? "border-violet-300/45 bg-violet-500/15 shadow-[0_0_24px_rgba(139,92,246,0.18)]"
-                    : done
-                      ? "border-emerald-300/20 bg-emerald-500/10 hover:bg-emerald-500/15"
-                      : "border-white/5 bg-white/[0.03] hover:border-white/12 hover:bg-white/[0.05]",
-                )}
+                className="flex items-center gap-1.5 text-[11px] font-medium"
               >
-                <span className="flex items-center justify-between gap-2">
-                  <span className="text-[9px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                    {String(index + 1).padStart(2, "0")}
-                  </span>
-                  {done ? (
-                    <Check className="size-3 text-emerald-200" />
-                  ) : active ? (
-                    <Sparkles className="size-3 text-violet-200" />
-                  ) : (
-                    <Circle className="size-3 text-white/25" />
-                  )}
-                </span>
                 <span
                   className={cn(
-                    "text-xs font-medium",
-                    active ? "text-violet-50" : done ? "text-emerald-50/90" : "text-muted-foreground",
+                    "flex size-5 items-center justify-center rounded-full border text-[10px] font-semibold",
+                    active
+                      ? "border-[#d7ddd0]/35 bg-white/[0.05] text-[#f3ece0]"
+                      : done
+                        ? "border-[#4e8170] bg-[#254e40]/45 text-[#c4d8ce]"
+                        : "border-white/12 bg-white/[0.03] text-white/35",
                   )}
                 >
+                  {done ? <Check className="size-3" /> : index + 1}
+                </span>
+                <span className={active ? "text-[#f3ece0]" : done ? "text-white/62" : "text-white/38"}>
                   {step.label}
                 </span>
               </Link>
+              {index < STEPS.length - 1 ? (
+                <span className="mx-3 h-px w-7 bg-white/12 sm:w-10" aria-hidden="true" />
+              ) : null}
             </li>
           );
         })}

@@ -25,7 +25,7 @@ export type TrackId = string;
  * result snapshot (so banners/export can read from the snapshot, not from the
  * possibly-changed live context).
  */
-export type PlaylistSource = "youtube" | "manual" | "demo" | "spotify";
+export type PlaylistSource = "youtube" | "manual" | "demo" | "spotify" | "apple";
 
 /** Prototype playlist “fit” from metadata heuristics (not AI). */
 export type PlaylistFitLevel = "mixed" | "moderately_consistent" | "highly_consistent";
@@ -92,10 +92,11 @@ export interface SequencedChapter {
 
 /** Optional metadata from YouTube or experimental Spotify import (no audio analysis). */
 export interface TrackImportMeta {
-  source: "youtube" | "spotify";
+  source: "youtube" | "spotify" | "apple";
   externalUrl: string;
   thumbnailUrl: string | null;
   platformTrackId: string;
+  platformTrackType?: string;
   platformPlaylistId: string;
   rawTitle?: string;
   channelTitle?: string;

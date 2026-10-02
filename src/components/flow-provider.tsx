@@ -56,6 +56,7 @@ export type FlowContextValue = {
   loadDemoPlaylist: () => void;
   loadYouTubePlaylist: (bundle: YoutubeImportBundle) => void;
   loadSpotifyPlaylistExperimental: (bundle: SpotifyImportBundle) => void;
+  loadApplePlaylist: (bundle: { playlistId: string; name: string; tracks: TrackAnalysis[] }) => void;
   playlistSource: PlaylistSource;
   playlistInputKind: PlaylistInputKind;
   importedPlaylistName: string | null;
@@ -65,6 +66,7 @@ export type FlowContextValue = {
   youtubeImportLimit: YoutubeImportLimit;
   setYoutubeImportLimit: (limit: YoutubeImportLimit) => void;
   spotifyImport: SpotifyImportBundle | null;
+  appleImport: { playlistId: string; name: string; tracks: TrackAnalysis[] } | null;
   /** What kind of playlist the user is importing — drives the flow keyword pool. */
   playlistTypeId: PlaylistTypeId | null;
   setPlaylistTypeId: (id: PlaylistTypeId | null) => void;
@@ -100,6 +102,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   const [youtubeImport, setYoutubeImport] = useState<YoutubeImportBundle | null>(null);
   const [youtubeImportLimit, setYoutubeImportLimit] = useState<YoutubeImportLimit>(200);
   const [spotifyImport, setSpotifyImport] = useState<SpotifyImportBundle | null>(null);
+  const [appleImport, setAppleImport] = useState<{ playlistId: string; name: string; tracks: TrackAnalysis[] } | null>(null);
   const [playlistTypeId, setPlaylistTypeIdState] = useState<PlaylistTypeId | null>(null);
   const [selectedFlowKeywordIds, setSelectedFlowKeywordIdsState] = useState<string[]>([]);
   /**
@@ -114,6 +117,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     setPlaylistRawState(v);
     setYoutubeImport(null);
     setSpotifyImport(null);
+    setAppleImport(null);
   }, []);
 
   const loadManualTracks = useCallback((text: string) => {
@@ -123,6 +127,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   const loadYouTubePlaylist = useCallback((bundle: YoutubeImportBundle) => {
     setYoutubeImport(bundle);
     setSpotifyImport(null);
+    setAppleImport(null);
     setPlaylistSource("youtube");
     setPlaylistRawState("");
   }, []);
@@ -130,13 +135,23 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   const loadSpotifyPlaylistExperimental = useCallback((bundle: SpotifyImportBundle) => {
     setSpotifyImport(bundle);
     setYoutubeImport(null);
+    setAppleImport(null);
     setPlaylistSource("spotify");
+    setPlaylistRawState("");
+  }, []);
+
+  const loadApplePlaylist = useCallback((bundle: { playlistId: string; name: string; tracks: TrackAnalysis[] }) => {
+    setAppleImport(bundle);
+    setYoutubeImport(null);
+    setSpotifyImport(null);
+    setPlaylistSource("apple");
     setPlaylistRawState("");
   }, []);
 
   const loadDemoPlaylist = useCallback(() => {
     setYoutubeImport(null);
     setSpotifyImport(null);
+    setAppleImport(null);
     setPlaylistSource("demo");
     setPlaylistRawState(SAMPLE_PLAYLIST_TEXT);
     // Showcase Flowlist's strength on chaotic playlists.
@@ -174,6 +189,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     if (playlistSource === "spotify" && spotifyImport) {
       return spotifyImport.tracks;
     }
+    if (playlistSource === "apple" && appleImport) return appleImport.tracks;
     if (
       (playlistSource === "manual" || playlistSource === "demo") &&
       playlistInputKind === "manual"
@@ -182,16 +198,17 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       return resolveManualTracksFromText(playlistRaw, album);
     }
     return [];
-  }, [playlistRaw, playlistInputKind, playlistSource, youtubeImport, spotifyImport]);
+  }, [playlistRaw, playlistInputKind, playlistSource, youtubeImport, spotifyImport, appleImport]);
 
   const importedPlaylistName = useMemo(() => {
     if (playlistSource === "youtube" && youtubeImport) return youtubeImport.name;
     if (playlistSource === "spotify" && spotifyImport) return spotifyImport.name;
+    if (playlistSource === "apple" && appleImport) return appleImport.name;
     return null;
-  }, [playlistSource, youtubeImport, spotifyImport]);
+  }, [playlistSource, youtubeImport, spotifyImport, appleImport]);
 
   const importedTracks = useMemo(() => {
-    if (playlistSource === "youtube" || playlistSource === "spotify") {
+    if (playlistSource === "youtube" || playlistSource === "spotify" || playlistSource === "apple") {
       return resolvedTracks.length > 0 ? resolvedTracks : null;
     }
     return null;
@@ -224,18 +241,21 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   const importedSourceId = useMemo<string | null>(() => {
     if (playlistSource === "youtube") return youtubeImport?.playlistId ?? null;
     if (playlistSource === "spotify") return spotifyImport?.playlistId ?? null;
+    if (playlistSource === "apple") return appleImport?.playlistId ?? null;
     return null;
-  }, [playlistSource, youtubeImport, spotifyImport]);
+  }, [playlistSource, youtubeImport, spotifyImport, appleImport]);
 
   const playlistExternalUrl = useMemo<string | null>(() => {
     if (playlistSource === "youtube") return youtubeImport?.externalUrl ?? null;
     if (playlistSource === "spotify") return spotifyImport?.playlistExternalUrl ?? null;
+    if (playlistSource === "apple") return null;
     return null;
   }, [playlistSource, youtubeImport, spotifyImport]);
 
   const sourceOwnerLabel = useMemo<string | null>(() => {
     if (playlistSource === "youtube") return youtubeImport?.channelTitle ?? null;
     if (playlistSource === "spotify") return spotifyImport?.ownerDisplayName ?? null;
+    if (playlistSource === "apple") return "Apple Music library";
     return null;
   }, [playlistSource, youtubeImport, spotifyImport]);
 
@@ -359,6 +379,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     setPlaylistSource("manual");
     setYoutubeImport(null);
     setSpotifyImport(null);
+    setAppleImport(null);
     setYoutubeImportLimit(200);
     setPlaylistTypeIdState(null);
     setSelectedFlowKeywordIdsState([]);
@@ -373,6 +394,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       loadDemoPlaylist,
       loadYouTubePlaylist,
       loadSpotifyPlaylistExperimental,
+      loadApplePlaylist,
       playlistSource,
       playlistInputKind,
       importedPlaylistName,
@@ -381,6 +403,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       youtubeImportLimit,
       setYoutubeImportLimit,
       spotifyImport,
+      appleImport,
       playlistTypeId,
       setPlaylistTypeId,
       selectedFlowKeywordIds,
@@ -403,6 +426,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       loadDemoPlaylist,
       loadYouTubePlaylist,
       loadSpotifyPlaylistExperimental,
+      loadApplePlaylist,
       playlistSource,
       playlistInputKind,
       importedPlaylistName,
@@ -410,6 +434,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       youtubeImport,
       youtubeImportLimit,
       spotifyImport,
+      appleImport,
       playlistTypeId,
       setPlaylistTypeId,
       selectedFlowKeywordIds,

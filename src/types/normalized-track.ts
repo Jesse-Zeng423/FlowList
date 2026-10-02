@@ -4,7 +4,7 @@ import type { ArtistConfidence } from "@/types/flowlist";
  * Platform-neutral import row (YouTube primary; Spotify maps into the same shape for sequencing).
  */
 
-export type NormalizedTrackSource = "youtube" | "spotify";
+export type NormalizedTrackSource = "youtube" | "spotify" | "apple";
 
 export interface NormalizedTrack {
   id: string;
@@ -18,6 +18,7 @@ export interface NormalizedTrack {
   thumbnailUrl: string | null;
   externalUrl: string;
   platformTrackId: string;
+  platformTrackType?: string;
   platformPlaylistId: string;
   /** Present for Spotify rows; YouTube may omit until duration exposed on items. */
   durationMs?: number;

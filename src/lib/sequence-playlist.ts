@@ -830,6 +830,7 @@ export interface SequencePlaylistOptions {
 const SOURCE_LABELS: Record<PlaylistSource, string> = {
   youtube: "YouTube import",
   spotify: "Spotify (experimental)",
+  apple: "Apple Music library",
   manual: "Manual paste",
   demo: "Demo playlist",
 };

@@ -53,9 +53,6 @@ export default function HomePage() {
     <AppFrame>
       <main className="flow-page-in relative flex flex-1 flex-col">
         <div className="flex flex-1 flex-col items-center justify-center pb-4 text-center">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#b7636d]">
-            Every playlist is a deck
-          </p>
           <h1 className="flow-display text-4xl font-semibold leading-[1.05] text-[#fcf3e5] sm:text-5xl">
             Deal a smoother playlist.
           </h1>
@@ -83,9 +80,6 @@ export default function HomePage() {
               Try demo
             </Link>
           </div>
-          <p className="mt-3 text-xs text-white/35">
-            Best for messy playlists and mood jumps.
-          </p>
         </div>
 
         {/* Decorative: scattered cards settle into order, then loop. Non-interactive. */}

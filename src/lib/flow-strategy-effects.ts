@@ -127,7 +127,7 @@ const PROGRESSION_KEYS: FeatureKey[] = [
  * Each progression target with weight `t` contributes:
  *   - `t > 0` (rising): higher feature → later in playlist
  *   - `t < 0` (falling): higher feature → earlier
- *   - `t === 0.5` (wave): ignored here — waveform ordering runs in `sequence-playlist`
+ *   - `t === 0.5` on wave strategies: waveform ordering runs in `sequence-playlist`
  *
  * For wave / cluster-run / chaptered curves where progression is sparse, the
  * function falls back to a generic "midband" score so the primary sort is at
@@ -141,8 +141,8 @@ export function strategyLateScore(track: TrackAnalysis, strategy: FlowStrategy):
   for (const key of PROGRESSION_KEYS) {
     const target = strategy.progression[key];
     if (typeof target !== "number" || target === 0) continue;
-    // `0.5` marks wave neutrality in the registry — not a monotone rise toward max.
-    if (Math.abs(target - 0.5) < 1e-6) continue;
+    // Only wave strategies use 0.5 as a sentinel; ordinary 0.5 weights still count.
+    if (strategyUsesWaveMotion(strategy) && Math.abs(target - 0.5) < 1e-6) continue;
     const v = featureValue(track, key);
     const w = Math.abs(target);
     const contrib = target > 0 ? v : 100 - v;

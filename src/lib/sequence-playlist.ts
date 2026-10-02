@@ -13,7 +13,7 @@
  *        - chaptered        → assign chapters by mood/rhythm signature
  *        - grand-finale     → ensure the cinematic peak closes the playlist
  *        - loop             → place the lowest-cost re-entry track last
- *   5. Smoothing pass on tempo (intensity-aware).
+ *   5. Constrained multi-feature / transition optimization, preserving chapters.
  *   6. Index-based phase assignment using strategy thresholds.
  *   7. Refine peak runs against `strategyPeakScore`.
  *   8. Build per-track explanations + arc summaries from the strategy.
@@ -31,6 +31,7 @@ import type {
   SoftLandingSummaryMeta,
   TrackAnalysis,
 } from "@/types/flowlist";
+import { optimizeSequence } from "@/lib/optimize-sequence";
 import { filterTracksForSequencing } from "@/lib/filter-tracks-for-sequencing";
 import {
   normalizeFlowKeywordIds,
@@ -64,36 +65,6 @@ import {
   type ResolvedFlowSemantics,
 } from "@/lib/flow-semantics";
 import { buildArcSummaries, buildTransitions } from "@/lib/transitions";
-
-// ---------------------------------------------------------------------------
-// Smoothing — tempo + rhythm-intensity aware
-// ---------------------------------------------------------------------------
-
-function smoothTempoOrder(tracks: TrackAnalysis[], smoothing: number): TrackAnalysis[] {
-  if (smoothing <= 0) return [...tracks];
-  const arr = [...tracks];
-  const windowSize = Math.min(arr.length, Math.max(2, Math.round(2 + smoothing * 2)));
-  const passes = Math.max(1, Math.round(smoothing));
-  const tempoJumpThreshold = smoothing >= 1.6 ? 1 : 2;
-
-  for (let p = 0; p < passes; p++) {
-    for (let i = 1; i < arr.length; i++) {
-      const prev = tempoRank(arr[i - 1]!.audioFeatures.tempoFeel);
-      const cur = tempoRank(arr[i]!.audioFeatures.tempoFeel);
-      if (cur - prev >= tempoJumpThreshold + 1) {
-        for (let j = i + 1; j < Math.min(i + windowSize + 1, arr.length); j++) {
-          if (tempoRank(arr[j]!.audioFeatures.tempoFeel) - prev <= tempoJumpThreshold) {
-            const tmp = arr[i]!;
-            arr[i] = arr[j]!;
-            arr[j] = tmp;
-            break;
-          }
-        }
-      }
-    }
-  }
-  return arr;
-}
 
 // ---------------------------------------------------------------------------
 // Curve-specific reshape helpers
@@ -153,17 +124,20 @@ function shapeControlledEnergyWaves(
   flowSemantics: ResolvedFlowSemantics,
 ): TrackAnalysis[] {
   const n = tracks.length;
-  if (n < 6) return [...tracks];
+  if (n < 3) return [...tracks];
 
-  const cycles = energyWaveCycleCount(n);
+  const cycles = Math.min(energyWaveCycleCount(n), Math.max(1, Math.floor((n - 1) / 4)));
   const landingFocused = !!strategy.flags.landingFocused;
   const bridgeWeight = strategy.flags.bridgeMode ? 0.28 : 0.15;
 
   const remaining = [...tracks].sort((a, b) => a.id.localeCompare(b.id));
   const out: TrackAnalysis[] = [];
+  const grooves = tracks.map(trackGrooveForWave);
+  const low = Math.min(...grooves);
+  const high = Math.max(...grooves);
 
   for (let i = 0; i < n; i++) {
-    const target = desiredGrooveAlongWave(i, n, cycles, landingFocused);
+    const target = low + (high - low) * (desiredGrooveAlongWave(i, n, cycles, landingFocused) - 8) / 88;
     const prev = i > 0 ? out[i - 1]! : null;
     let bestIdx = 0;
     let bestCost = Number.POSITIVE_INFINITY;
@@ -202,13 +176,13 @@ function clusterRunReorder(
   strategy: FlowStrategy,
 ): TrackAnalysis[] {
   const n = tracks.length;
-  if (n < 6) return [...tracks];
-  const scored = tracks.map((t) => ({ t, s: strategyPeakScore(t, strategy) }));
-  // Cluster size = roughly 30–45% of the playlist, at least 3.
-  const clusterSize = Math.max(3, Math.round(n * 0.35));
+  if (n < 3) return [...tracks];
+  const scored = tracks.map((t, index) => ({ t, index, s: strategyPeakScore(t, strategy) }));
+  // Reserve an opening and closing track even for short playlists.
+  const clusterSize = Math.min(n - 2, Math.max(1, Math.round(n * 0.35)));
   const cluster = [...scored].sort((a, b) => b.s - a.s).slice(0, clusterSize);
-  const clusterIds = new Set(cluster.map((c) => c.t.id));
-  const rest = tracks.filter((t) => !clusterIds.has(t.id));
+  const clusterIndices = new Set(cluster.map((c) => c.index));
+  const rest = tracks.filter((_, index) => !clusterIndices.has(index));
 
   // Place the cluster around the focal band.
   //   • bangerClusterMidOnly (Banger Run + Soft Landing conflict): cluster must
@@ -223,7 +197,7 @@ function clusterRunReorder(
   const maxStart = strategy.flags.bangerClusterMidOnly
     ? Math.floor(n * 0.5) - clusterSize   // cluster must END before 60%
     : n - clusterSize;
-  const startIdx = Math.min(maxStart, Math.max(0, Math.round(n * focal)));
+  const startIdx = Math.max(0, Math.min(maxStart, Math.round(n * focal)));
 
   // Sort cluster ascending by peak score so the strongest banger lands at the
   // back of the cluster (or the very end for grand-finale).
@@ -249,10 +223,10 @@ function applySoftLandingTail(
   if (ordered.length < 3) return ordered;
   const n = ordered.length;
   const k = Math.max(2, Math.ceil(n * 0.1));
-  const scored = ordered.map((t) => ({ t, q: strategyLandingScore(t, strategy) }));
+  const scored = ordered.map((t, index) => ({ t, index, q: strategyLandingScore(t, strategy) }));
   const byQ = [...scored].sort((a, b) => b.q - a.q);
-  const poolIds = new Set(byQ.slice(0, k).map((x) => x.t.id));
-  const head = ordered.filter((t) => !poolIds.has(t.id));
+  const poolIndices = new Set(byQ.slice(0, k).map((x) => x.index));
+  const head = ordered.filter((_, index) => !poolIndices.has(index));
   const poolTracks = byQ
     .slice(0, k)
     .map((x) => x.t)
@@ -1046,8 +1020,7 @@ export function sequencePlaylist(
     chapters = moodResult.chapters;
     chapterRanges = moodResult.ranges;
 
-    // Light smoothing across chapter boundaries (don't over-smooth internal order).
-    ordered = smoothTempoOrder(ordered, Math.min(0.8, strategy.smoothing * 0.6));
+    // Chapter boundaries are preserved by the constrained optimizer.
 
     if (
       strategy.flags.landingFocused &&
@@ -1058,10 +1031,6 @@ export function sequencePlaylist(
       reorderClosingChapterForSoftLanding(ordered, lastRg, strategy);
       softenTailWithinLastChapter(ordered, lastRg, strategy);
       ensureStrongestLandingInLastChapter(ordered, lastRg, strategy);
-      ordered = smoothTempoOrder(
-        ordered,
-        Math.min(1.05, Math.max(0.75, strategy.smoothing * 0.78)),
-      );
     }
 
     if (process.env.NODE_ENV === "development" && !moodResult.validation.ok) {
@@ -1072,19 +1041,16 @@ export function sequencePlaylist(
 
     if (waveMotion) {
       ordered = shapeControlledEnergyWaves(active, strategy, flowSemantics);
-      ordered = smoothTempoOrder(ordered, strategy.smoothing);
-      ordered = smoothTempoOrder(ordered, Math.max(0.58, strategy.smoothing * 0.68));
     } else {
       // Primary ordering: late-progress score under strategy.
       const scored = active.map((t) => ({ track: t, score: strategyLateScore(t, strategy) }));
       scored.sort((a, b) => a.score - b.score);
       ordered = scored.map((s) => s.track);
 
-      // Light tempo smoothing pass.
-      ordered = smoothTempoOrder(ordered, strategy.smoothing);
+      // Neighbour transitions are refined after structural placement.
     }
 
-    if (curve === "cluster-run" || strategy.flags.clusterRun) {
+    if (curve === "cluster-run" || curve === "peak-centered" || strategy.flags.clusterRun) {
       ordered = clusterRunReorder(ordered, strategy);
     }
 
@@ -1092,7 +1058,7 @@ export function sequencePlaylist(
       ordered = applySoftLandingTail(ordered, strategy);
       ordered = swapTailForSofterRhythm(ordered, strategy);
       ordered = softenFinalStretchForLanding(ordered, strategy);
-      ordered = smoothTempoOrder(ordered, Math.max(1.15, strategy.smoothing * 0.95));
+
       ordered = ensureStrongestLandingFinale(ordered, strategy);
     }
 
@@ -1111,6 +1077,8 @@ export function sequencePlaylist(
       chapterRanges = out.ranges;
     }
   }
+
+  ordered = optimizeSequence(ordered, strategy, flowSemantics, chapterRanges);
 
   // ---- Phase assignment ----
   const thresholds = phaseThresholdsForStrategy(strategy);

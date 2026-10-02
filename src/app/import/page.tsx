@@ -24,6 +24,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { parseImportApiResponse } from "@/lib/import-api-response";
 import { normalizedTracksToTrackAnalyses } from "@/lib/normalized-to-track-analysis";
 import { spotifyRowsToTrackAnalyses } from "@/lib/spotify-map-tracks";
+import { appleRowsToTrackAnalyses, type AppleImportedRow } from "@/lib/apple-map-tracks";
+import { appleLibraryRequest, connectAppleMusic } from "@/lib/apple-music-client";
 import type { SpotifyPlaylistImportResponse } from "@/types/spotify-api";
 import {
   isYoutubeApiErrorPayload,
@@ -66,11 +68,13 @@ export default function PlaylistPage() {
     loadDemoPlaylist,
     loadYouTubePlaylist,
     loadSpotifyPlaylistExperimental,
+    loadApplePlaylist,
     playlistSource,
     youtubeImport,
     youtubeImportLimit,
     setYoutubeImportLimit,
     spotifyImport,
+    appleImport,
     resolvedTracks,
   } = useFlow();
 
@@ -80,6 +84,11 @@ export default function PlaylistPage() {
   const [spotifyBusy, setSpotifyBusy] = useState(false);
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
   const [spotifyError, setSpotifyError] = useState<string | null>(null);
+  const [appleToken, setAppleToken] = useState<string | null>(null);
+  const [applePlaylists, setApplePlaylists] = useState<Array<{ id: string; name: string }>>([]);
+  const [appleSelected, setAppleSelected] = useState("");
+  const [appleBusy, setAppleBusy] = useState(false);
+  const [appleError, setAppleError] = useState<string | null>(null);
   const [importMode, setImportMode] = useState<ImportMode>("youtube");
 
   const handleDemoFromQuery = () => {
@@ -217,6 +226,30 @@ export default function PlaylistPage() {
     }
   }
 
+  async function connectApple() {
+    setAppleBusy(true); setAppleError(null);
+    try {
+      const token = await connectAppleMusic();
+      const data = await appleLibraryRequest(token, { action: "list" });
+      const playlists = Array.isArray(data.playlists) ? data.playlists as Array<{ id: string; name: string }> : [];
+      setAppleToken(token); setApplePlaylists(playlists); setAppleSelected(playlists[0]?.id ?? "");
+    } catch (error) { setAppleError(error instanceof Error ? error.message : "Apple Music connection failed."); }
+    finally { setAppleBusy(false); }
+  }
+
+  async function importApple() {
+    if (!appleToken || !appleSelected) return;
+    setAppleBusy(true); setAppleError(null);
+    try {
+      const data = await appleLibraryRequest(appleToken, { action: "tracks", playlistId: appleSelected });
+      const rows = Array.isArray(data.tracks) ? data.tracks as AppleImportedRow[] : [];
+      const tracks = appleRowsToTrackAnalyses(rows, appleSelected);
+      if (!tracks.length) throw new Error("This playlist has no supported songs or music videos.");
+      loadApplePlaylist({ playlistId: appleSelected, name: applePlaylists.find(row => row.id === appleSelected)?.name ?? "Apple Music playlist", tracks });
+    } catch (error) { setAppleError(error instanceof Error ? error.message : "Apple Music import failed."); }
+    finally { setAppleBusy(false); }
+  }
+
   return (
     <AppFrame contentClassName="max-w-[42rem]">
       <Suspense fallback={null}>
@@ -351,6 +384,19 @@ export default function PlaylistPage() {
             </Button>
           </section>
         ) : null}
+
+        <details className="text-xs text-white/50">
+          <summary className="cursor-pointer inline-flex items-center gap-1 hover:text-white/75"><Music2 className="size-3.5" /> Apple Music library</summary>
+          <div className="table-panel mt-2 rounded-xl p-4">
+            <p className="mb-3">Connect your Apple Music account, select one of your library playlists, then import up to 300 tracks.</p>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" disabled={appleBusy} onClick={connectApple}>{appleBusy ? "Loading…" : appleToken ? "Refresh playlists" : "Connect Apple Music"}</Button>
+              {appleToken ? <><select aria-label="Apple Music playlist" value={appleSelected} onChange={event => setAppleSelected(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-white/12 bg-[#14241e] px-3 text-sm text-white">{applePlaylists.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select><Button type="button" disabled={appleBusy || !appleSelected} onClick={importApple}>Import</Button></> : null}
+            </div>
+            {appleError ? <p className="mt-2 text-amber-100" role="alert">{appleError}</p> : null}
+            {playlistSource === "apple" && appleImport ? <p className="mt-2 text-white/70">{appleImport.name} · {appleImport.tracks.length} tracks ready</p> : null}
+          </div>
+        </details>
 
         <details className="text-xs text-white/42">
           <summary className="cursor-pointer inline-flex items-center gap-1 hover:text-white/64">

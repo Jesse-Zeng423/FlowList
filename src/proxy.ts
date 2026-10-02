@@ -10,7 +10,8 @@ export function proxy(request: NextRequest) {
   }
 
   const origin = request.headers.get("origin");
-  if (origin && origin !== request.nextUrl.origin) {
+  const writeRoute = request.nextUrl.pathname !== "/api/youtube/playlist";
+  if ((writeRoute && origin !== request.nextUrl.origin) || (!writeRoute && origin && origin !== request.nextUrl.origin)) {
     return NextResponse.json(
       {
         error: {
@@ -27,5 +28,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: "/api/youtube/playlist",
+  matcher: ["/api/youtube/playlist", "/api/youtube/export", "/api/apple/library", "/api/feedback"],
 };

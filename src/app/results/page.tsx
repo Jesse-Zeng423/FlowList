@@ -11,6 +11,10 @@ import {
   ExternalLink,
   FileText,
   ListMusic,
+  ArrowDown,
+  ArrowUp,
+  Lock,
+  Unlock,
   Waves,
 } from "lucide-react";
 import { AppFrame } from "@/components/app-frame";
@@ -19,6 +23,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { canRegenerateFromCurrentState } from "@/lib/result-freshness";
 import { buildOrderExport } from "@/lib/build-order-export";
+import { makeYouTubeExportDraft, YOUTUBE_EXPORT_KEY } from "@/lib/youtube-export-draft";
+import { makeAppleExportDraft, APPLE_EXPORT_KEY } from "@/lib/apple-export-draft";
+import { featureTrust, moveOccurrence, orderedOccurrences } from "@/lib/result-editor";
+import { buildTransitions } from "@/lib/transitions";
+import { combineResolvedFlowSemantics } from "@/lib/flow-semantics";
 import { playResultReady } from "@/lib/sound-effects";
 import { cn } from "@/lib/utils";
 import type {
@@ -68,6 +77,7 @@ function sourceDisplay(snapshot: SequencedPlaylistSnapshot | null) {
   if (!snapshot) return "Source snapshot";
   if (snapshot.source === "youtube") return "YouTube Music metadata";
   if (snapshot.source === "spotify") return "Spotify experimental";
+  if (snapshot.source === "apple") return "Apple Music library";
   if (snapshot.source === "demo") return "Demo playlist";
   return snapshot.sourceLabel;
 }
@@ -123,10 +133,12 @@ function buildExportText({
   tracks,
   transitions,
   snapshot,
+  manuallyEdited,
 }: {
   tracks: SequencedTrack[];
   transitions: TransitionInsight[];
   snapshot: SequencedPlaylistSnapshot | null;
+  manuallyEdited: boolean;
 }) {
   const lines = ["Flowlist - sequenced order (prototype sequencing)"];
   if (snapshot) {
@@ -151,7 +163,7 @@ function buildExportText({
     lines.push(
       `   ${track.phase} / Energy ${track.estimatedEnergy} / Rhythm ${track.rhythmIntensityScore} / ${track.tempoFeel} tempo${bpm ? ` / ${bpm}` : ""}`,
     );
-    lines.push(`   Why here: ${track.positionReason}`);
+    lines.push(`   Why here: ${manuallyEdited ? "Placed here manually; original position note no longer applies." : track.positionReason}`);
     const transition = transitions.find((item) => item.toIndex === index);
     if (transition) lines.push(`   Transition: ${transition.explanation}`);
     lines.push("");
@@ -163,12 +175,27 @@ function TrackRow({
   track,
   position,
   transition,
+  originalPosition,
+  manualOrder,
+  canMoveUp,
+  canMoveDown,
+  onMove,
+  rating,
+  onRate,
 }: {
   track: SequencedTrack;
   position: number;
   transition?: TransitionInsight;
+  originalPosition: number;
+  manualOrder: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMove: (direction: -1 | 1) => void;
+  rating?: "smooth" | "jarring" | "unsure";
+  onRate: (rating: "smooth" | "jarring" | "unsure") => void;
 }) {
   const bpm = bpmDisplay(track.audioFeatures);
+  const trust = featureTrust(track);
   return (
     <article className="border-b border-white/7 py-2.5 last:border-b-0">
       <div className="grid grid-cols-[2rem_minmax(0,1fr)] gap-3 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-start">
@@ -195,17 +222,28 @@ function TrackRow({
             Energy {track.estimatedEnergy} · Rhythm {track.rhythmIntensityScore} · {track.tempoFeel} tempo
             {bpm ? ` · ${bpm}` : ""}
           </p>
+          <p className="mt-1 text-[11px] text-white/48" title={trust.detail}>
+            Features: {trust.label}{originalPosition !== position ? ` · was #${originalPosition + 1}` : ""}
+          </p>
         </div>
         <div className="col-start-2 flex flex-wrap gap-1.5 sm:col-auto sm:justify-end">
-          <Badge variant="outline" className="border-white/12 bg-white/[0.04] text-[10px] font-normal text-white/60">
+          {!manualOrder ? <Badge variant="outline" className="border-white/12 bg-white/[0.04] text-[10px] font-normal text-white/60">
             {track.phase}
-          </Badge>
-          {track.semanticPhaseRibbon ? (
+          </Badge> : null}
+          {!manualOrder && track.semanticPhaseRibbon ? (
             <Badge variant="outline" className="border-[#779e8e]/28 bg-[#245343]/20 text-[10px] font-normal text-[#d5e2da]">
               {track.semanticPhaseRibbon}
             </Badge>
           ) : null}
         </div>
+      </div>
+      <div className="ml-11 mt-1.5 flex flex-wrap items-center gap-1 text-xs">
+        <button type="button" disabled={!canMoveUp} onClick={() => onMove(-1)} aria-label={`Move ${track.title} up`} className="rounded border border-white/12 px-2 py-1 text-white/65 disabled:opacity-30"><ArrowUp className="size-3.5" /></button>
+        <button type="button" disabled={!canMoveDown} onClick={() => onMove(1)} aria-label={`Move ${track.title} down`} className="rounded border border-white/12 px-2 py-1 text-white/65 disabled:opacity-30"><ArrowDown className="size-3.5" /></button>
+        {transition ? <span className="ml-2 text-white/38">Transition:</span> : null}
+        {transition ? (["smooth", "jarring", "unsure"] as const).map(value => (
+          <button key={value} type="button" onClick={() => onRate(value)} aria-pressed={rating === value} className={cn("rounded border px-2 py-1 capitalize", rating === value ? "border-[#96b9a7] bg-[#245343]/40 text-white" : "border-white/10 text-white/45")}>{value}</button>
+        )) : null}
       </div>
       <details className="group ml-11 mt-1.5 text-xs text-white/48">
         <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-white/42 hover:text-white/68">
@@ -213,10 +251,7 @@ function TrackRow({
           Why here{transition ? " / Transition" : ""}
         </summary>
         <div className="mt-2 space-y-1.5 rounded-lg bg-black/18 px-3 py-2 leading-relaxed">
-          <p>
-            <span className="font-medium text-white/66">Why here: </span>
-            {track.positionReason}
-          </p>
+          <p><span className="font-medium text-white/66">Why here: </span>{manualOrder ? "Placed here manually. The transition below reflects the edited order." : track.positionReason}</p>
           {transition ? (
             <p>
               <span className="font-medium text-white/66">Transition: </span>
@@ -306,6 +341,55 @@ function EmptyState({
 export default function ResultsPage() {
   const { result, resultIsStale, resolvedTracks, playlistTypeId, selectedFlowKeywordIds, reset } = useFlow();
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
+  const [editor, setEditor] = useState<{ key: string; order: number[] } | null>(null);
+  const [lockFirst, setLockFirst] = useState(false);
+  const [lockLast, setLockLast] = useState(false);
+  const [showComparison, setShowComparison] = useState(false);
+  const [feedbackStatus, setFeedbackStatus] = useState("");
+  const [feedbackState, setFeedbackState] = useState<{ key: string; ratings: Record<string, "smooth" | "jarring" | "unsure"> }>(() => {
+    const key = `flowlist:feedback:v1:${result?.snapshot?.inputFingerprint ?? "none"}`;
+    if (typeof window === "undefined") return { key, ratings: {} };
+    try { return { key, ratings: JSON.parse(window.localStorage.getItem(key) || "{}") }; }
+    catch { return { key, ratings: {} }; }
+  });
+  const resultKey = result?.snapshot?.generatedAt ?? "";
+  const indices = useMemo(() => result?.tracks.map((_, i) => i) ?? [], [result]);
+  const order = editor?.key === resultKey && editor.order.length === indices.length ? editor.order : indices;
+  const manuallyEdited = order.some((index, position) => index !== position);
+  const tracks = useMemo(() => result ? orderedOccurrences(result.tracks, order) : [], [result, order]);
+  const transitions = useMemo(() => {
+    if (!result) return [];
+    if (!manuallyEdited) return result.transitions;
+    return buildTransitions(tracks, result.playlistTypeId ?? null, result.flowKeywordIds ?? [], combineResolvedFlowSemantics(result.flowKeywordIds ?? []));
+  }, [result, tracks, manuallyEdited]);
+  const feedbackKey = `flowlist:feedback:v1:${result?.snapshot?.inputFingerprint ?? "none"}`;
+  const feedback = feedbackState.key === feedbackKey ? feedbackState.ratings : {};
+
+  const rateTransition = (position: number, value: "smooth" | "jarring" | "unsure") => {
+    const from = tracks[position - 1];
+    const to = tracks[position];
+    if (!from || !to) return;
+    const key = `${position}:${from.id}:${to.id}`;
+    const evaluationStorageKey = `${feedbackKey}:id:${key}`;
+    let evaluationId: string;
+    try {
+      evaluationId = window.localStorage.getItem(evaluationStorageKey) || crypto.randomUUID();
+      window.localStorage.setItem(evaluationStorageKey, evaluationId);
+    } catch { evaluationId = crypto.randomUUID(); }
+    setFeedbackState(previous => {
+      const next = { ...(previous.key === feedbackKey ? previous.ratings : {}), [key]: value };
+      try { window.localStorage.setItem(feedbackKey, JSON.stringify(next)); } catch {}
+      return { key: feedbackKey, ratings: next };
+    });
+    setFeedbackStatus("Rating saved in this browser. Sending anonymous transition metrics…");
+    void fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+      evaluationId, rating: value, playlistTypeId: result?.playlistTypeId ?? "unknown", flowKeywordIds: result?.flowKeywordIds ?? [],
+      source: result?.snapshot?.source ?? "manual", fromEnergy: from.estimatedEnergy * 10, toEnergy: to.estimatedEnergy * 10,
+      fromRhythm: from.rhythmIntensityScore, toRhythm: to.rhythmIntensityScore,
+      fromConfidence: from.audioFeatures.confidence, toConfidence: to.audioFeatures.confidence,
+    }) }).then(response => setFeedbackStatus(response.ok ? "Anonymous transition rating submitted." : "Rating saved in this browser; feedback collection is not configured or unavailable."))
+      .catch(() => setFeedbackStatus("Rating saved in this browser; feedback collection is unavailable."));
+  };
 
   // Play once when arriving from a fresh generation. The flag is written by analyze/page.tsx
   // immediately before router.replace("/results") and consumed here to avoid replaying on
@@ -318,17 +402,17 @@ export default function ResultsPage() {
       }
     } catch {}
   }, []);
-  const groups = useMemo(() => (result ? buildOrderGroups(result.tracks, result.chapters) : []), [result]);
+  const groups = useMemo(() => (result ? buildOrderGroups(tracks, manuallyEdited ? undefined : result.chapters) : []), [result, tracks, manuallyEdited]);
   const transitionByIndex = useMemo(() => {
     const map = new Map<number, TransitionInsight>();
-    result?.transitions.forEach((transition) => map.set(transition.toIndex, transition));
+    transitions.forEach((transition) => map.set(transition.toIndex, transition));
     return map;
-  }, [result]);
+  }, [transitions]);
   const exportText = useMemo(
-    () => (result ? buildExportText({ tracks: result.tracks, transitions: result.transitions, snapshot: result.snapshot ?? null }) : ""),
-    [result],
+    () => (result ? buildExportText({ tracks, transitions, snapshot: result.snapshot ?? null, manuallyEdited }) : ""),
+    [result, tracks, transitions, manuallyEdited],
   );
-  const orderText = useMemo(() => result ? buildOrderExport(result.tracks) : "", [result]);
+  const orderText = useMemo(() => buildOrderExport(tracks), [tracks]);
 
   if (!result) {
     return (
@@ -354,7 +438,7 @@ export default function ResultsPage() {
     );
   }
 
-  const { tracks, playlistFit, snapshot, skippedUnavailableCount, moodArcSummary, rhythmArcSummary } = result;
+  const { playlistFit, snapshot, skippedUnavailableCount, moodArcSummary, rhythmArcSummary } = result;
   const flowLabels = snapshot?.selectedFlowKeywords.map((keyword) => keyword.label) ?? [];
 
   const handleCopy = async () => {
@@ -375,6 +459,20 @@ export default function ResultsPage() {
     anchor.download = "flowlist-sequence.txt";
     anchor.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleYouTubeExport = () => {
+    const draft = makeYouTubeExportDraft(tracks, snapshot?.playlistName);
+    if (!draft) return;
+    window.sessionStorage.setItem(YOUTUBE_EXPORT_KEY, JSON.stringify(draft));
+    window.location.assign("/export/youtube");
+  };
+
+  const handleAppleExport = () => {
+    const draft = makeAppleExportDraft(tracks, snapshot?.playlistName);
+    if (!draft) return;
+    window.sessionStorage.setItem(APPLE_EXPORT_KEY, JSON.stringify(draft));
+    window.location.assign("/export/apple");
   };
 
   return (
@@ -411,6 +509,8 @@ export default function ResultsPage() {
               <Download className="size-4" />
               Export as text
             </Button>
+            {snapshot?.source === "youtube" && makeYouTubeExportDraft(tracks, snapshot.playlistName) ? <Button type="button" variant="outline" onClick={handleYouTubeExport}>Save to YouTube</Button> : null}
+            {snapshot?.source === "apple" && makeAppleExportDraft(tracks, snapshot.playlistName) ? <Button type="button" variant="outline" onClick={handleAppleExport}>Save to Apple Music</Button> : null}
           </div>
           <p className="mt-2 text-xs text-white/48" role="status">
             {copyStatus === "error"
@@ -419,7 +519,22 @@ export default function ResultsPage() {
                 ? "Copies the ordered tracks with direct YouTube video links."
                 : "Copies a clean, numbered list of the ordered tracks."}
           </p>
+          <p className="mt-1 text-xs text-white/43" role="status">After listening, rate each transition below. {feedbackStatus}</p>
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
+            <Button type="button" variant="outline" aria-pressed={lockFirst} onClick={() => setLockFirst(v => !v)}>{lockFirst ? <Lock className="size-3.5" /> : <Unlock className="size-3.5" />} {lockFirst ? "First locked" : "Lock first"}</Button>
+            <Button type="button" variant="outline" aria-pressed={lockLast} onClick={() => setLockLast(v => !v)}>{lockLast ? <Lock className="size-3.5" /> : <Unlock className="size-3.5" />} {lockLast ? "Last locked" : "Lock last"}</Button>
+            <Button type="button" variant="ghost" onClick={() => { setEditor(null); setLockFirst(false); setLockLast(false); }}>Restore algorithm order</Button>
+            <Button type="button" variant="ghost" aria-expanded={showComparison} onClick={() => setShowComparison(v => !v)}>{showComparison ? "Hide comparison" : "Compare original order"}</Button>
+          </div>
         </header>
+
+        {showComparison ? <section className="table-panel rounded-xl p-4 text-xs text-white/65">
+          <h2 className="flow-display mb-2 text-lg text-white">Original → current</h2>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <ol className="space-y-1"><li className="font-semibold text-white/80">Original import</li>{resolvedTracks.map((track, index) => <li key={`original-${index}`}>{index + 1}. {track.title} — {track.artist}</li>)}</ol>
+            <ol className="space-y-1"><li className="font-semibold text-white/80">Current sequence</li>{tracks.map((track, index) => <li key={`current-${index}`}>{index + 1}. {track.title} — {track.artist}</li>)}</ol>
+          </div>
+        </section> : null}
 
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_15rem]">
           <main className="table-panel result-order-in rounded-xl p-4 sm:p-5">
@@ -458,6 +573,13 @@ export default function ResultsPage() {
                       track={track}
                       position={position}
                       transition={transitionByIndex.get(position)}
+                      originalPosition={order[position] ?? position}
+                      manualOrder={manuallyEdited}
+                      canMoveUp={position > 0 && !(lockFirst && position <= 1) && !(lockLast && position === tracks.length - 1)}
+                      canMoveDown={position < tracks.length - 1 && !(lockLast && position >= tracks.length - 2) && !(lockFirst && position === 0)}
+                      onMove={direction => setEditor({ key: resultKey, order: moveOccurrence(order, position, direction, { first: lockFirst, last: lockLast }) })}
+                      rating={feedback[`${position}:${tracks[position - 1]?.id}:${track.id}`]}
+                      onRate={value => rateTransition(position, value)}
                     />
                   );
                 })}

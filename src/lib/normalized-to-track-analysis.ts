@@ -30,6 +30,7 @@ export function normalizedTracksToTrackAnalyses(rows: NormalizedTrack[]): TrackA
         externalUrl: row.externalUrl,
         thumbnailUrl: row.thumbnailUrl,
         platformTrackId: row.platformTrackId,
+        platformTrackType: row.platformTrackType,
         platformPlaylistId: row.platformPlaylistId,
         rawTitle: row.rawTitle,
         channelTitle: row.channelTitle,

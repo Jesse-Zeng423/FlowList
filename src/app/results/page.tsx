@@ -18,6 +18,7 @@ import { useFlow } from "@/components/flow-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { canRegenerateFromCurrentState } from "@/lib/result-freshness";
+import { buildOrderExport } from "@/lib/build-order-export";
 import { playResultReady } from "@/lib/sound-effects";
 import { cn } from "@/lib/utils";
 import type {
@@ -304,7 +305,7 @@ function EmptyState({
 
 export default function ResultsPage() {
   const { result, resultIsStale, resolvedTracks, playlistTypeId, selectedFlowKeywordIds, reset } = useFlow();
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
 
   // Play once when arriving from a fresh generation. The flag is written by analyze/page.tsx
   // immediately before router.replace("/results") and consumed here to avoid replaying on
@@ -327,6 +328,7 @@ export default function ResultsPage() {
     () => (result ? buildExportText({ tracks: result.tracks, transitions: result.transitions, snapshot: result.snapshot ?? null }) : ""),
     [result],
   );
+  const orderText = useMemo(() => result ? buildOrderExport(result.tracks) : "", [result]);
 
   if (!result) {
     return (
@@ -357,11 +359,11 @@ export default function ResultsPage() {
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(exportText);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(orderText);
+      setCopyStatus("copied");
+      window.setTimeout(() => setCopyStatus("idle"), 2500);
     } catch {
-      setCopied(false);
+      setCopyStatus("error");
     }
   };
 
@@ -401,15 +403,22 @@ export default function ResultsPage() {
               ))}
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            <Button type="button" variant="outline" className="rounded-lg border-white/14 bg-black/16" onClick={handleCopy}>
-              {copied ? <Check className="size-4 text-emerald-300" /> : <Copy className="size-4" />}
-              {copied ? "Copied" : "Copy sequence"}
+            <Button type="button" className="rounded-lg bg-[#f3ece0] text-[#12231d] hover:bg-[#faf6ee]" onClick={handleCopy}>
+              {copyStatus === "copied" ? <Check className="size-4" /> : <Copy className="size-4" />}
+              {copyStatus === "copied" ? "Order copied" : "Copy track order"}
             </Button>
             <Button type="button" variant="outline" className="rounded-lg border-white/14 bg-black/16" onClick={handleDownload}>
               <Download className="size-4" />
               Export as text
             </Button>
           </div>
+          <p className="mt-2 text-xs text-white/48" role="status">
+            {copyStatus === "error"
+              ? "Could not access clipboard. Use Export as text instead."
+              : snapshot?.source === "youtube"
+                ? "Copies the ordered tracks with direct YouTube video links."
+                : "Copies a clean, numbered list of the ordered tracks."}
+          </p>
         </header>
 
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_15rem]">

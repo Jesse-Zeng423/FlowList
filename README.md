@@ -1,10 +1,12 @@
 # Flowlist
 
-Flowlist reorders playlists into a smoother **listening journey** using **emotional continuity**, **rhythmic continuity**, **energy progression**, and **user-chosen flow keywords** (intro → build → peak → cooldown → outro). It does **not** stream music, download audio/video, or run lyrics analysis.
+Turn a scattered playlist into a listening journey. Import tracks, choose a flow card, then copy the new order to use or share. Flowlist sequences by estimated mood, rhythm, and energy; it does not analyze audio or lyrics.
 
-## Live Demo
+[Try the demo playlist — no account or API key needed](https://flow-list-kappa.vercel.app/import?demo=1) · [Live app](https://flow-list-kappa.vercel.app/)
 
-flow-list-kappa.vercel.app
+![Sequenced playlist result with ordered tracks and flow summary](./screenshots/result1.jpg)
+
+The demo loads sample tracks entirely in the browser. Visitors can finish the flow and copy a numbered track list without configuring a key. Importing a public YouTube playlist uses the server's YouTube API key.
 
 ## What it does
 
@@ -12,6 +14,8 @@ flow-list-kappa.vercel.app
 - Choose playlist type
 - Choose up to 2 flow keywords
 - Generate prototype listening order
+- Copy a clean numbered order; YouTube imports include direct video links
+- Download a detailed text report with placement and transition notes
 - View mood chapters, energy/rhythm arcs, and transition explanations
 
 ## Best for
@@ -39,7 +43,7 @@ Flowlist currently uses metadata and prototype mood/rhythm estimates. It does no
 - Third-party BPM provider
 - Better artist/title matching
 - Virtualized results for very large playlists
-- Export/copy workflow polish
+- Authenticated YouTube playlist creation (requires user OAuth and write permission)
 
 ## YouTube Music first
 
@@ -65,7 +69,7 @@ Create `.env.local` (never commit real keys):
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `YOUTUBE_API_KEY` | **Yes** for YouTube import | YouTube Data API v3 key (server only; not exposed to the browser). |
+| `YOUTUBE_API_KEY` | **Yes** for YouTube import; **no** for demo or manual paste | YouTube Data API v3 key (server only; not exposed to the browser). |
 | `SPOTIFY_CLIENT_ID` | No | Experimental Spotify import only. |
 | `SPOTIFY_CLIENT_SECRET` | No | Experimental Spotify import only. |
 
@@ -104,6 +108,11 @@ curl -i -X POST http://localhost:3000/api/youtube/playlist \
 - No **authentication**, **database**, **payment**, or **real AI API** calls in this prototype.
 - **No** Amazon Music integration.
 - Metadata and user text only — **no** storage of audio/video files.
+- Copying an order does not create a playlist in the user's YouTube account.
+
+## License
+
+[MIT](./LICENSE)
 
 ## Tech stack
 
